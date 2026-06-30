@@ -130,7 +130,12 @@ class TxGNN:
         self.G = self.G.to('cpu')
         print('Creating minibatch pretraining dataloader...')
         train_eid_dict = {etype: self.G.edges(form = 'eid', etype =  etype) for etype in self.G.canonical_etypes}
-        sampler = dgl.dataloading.MultiLayerFullNeighborSampler(2)
+        # DGL >= 1.0: MultiLayerFullNeighborSampler → NeighborSampler([-1,-1])
+        if hasattr(dgl.dataloading, 'MultiLayerFullNeighborSampler'):
+            sampler = dgl.dataloading.MultiLayerFullNeighborSampler(2)
+        else:
+            sampler = dgl.dataloading.NeighborSampler([-1, -1])
+
         rel_unique = self.df.relation.unique()
         reverse_etypes = {}
         for rel in rel_unique:
@@ -140,16 +145,28 @@ class TxGNN:
                 reverse_etypes[rel] = 'rev_' + rel
             else:
                 reverse_etypes[rel] = rel
-        
-        dataloader = dgl.dataloading.EdgeDataLoader(
-            self.G, train_eid_dict, sampler,
-            negative_sampler=Minibatch_NegSampler(self.G, 1, 'fix_dst'),
-            batch_size=batch_size,
-            shuffle=True,
-            drop_last=False,
-            #exclude='reverse_types',
-            #reverse_etypes = reverse_etypes,
-            num_workers=0)
+
+        # DGL >= 1.0: negative_sampler moved into as_edge_prediction_sampler;
+        # EdgeDataLoader renamed to DataLoader
+        if hasattr(dgl.dataloading, 'as_edge_prediction_sampler'):
+            sampler = dgl.dataloading.as_edge_prediction_sampler(
+                sampler,
+                negative_sampler=Minibatch_NegSampler(self.G, 1, 'fix_dst'),
+            )
+            dataloader = dgl.dataloading.DataLoader(
+                self.G, train_eid_dict, sampler,
+                batch_size=batch_size,
+                shuffle=True,
+                drop_last=False,
+                num_workers=0)
+        else:
+            dataloader = dgl.dataloading.EdgeDataLoader(
+                self.G, train_eid_dict, sampler,
+                negative_sampler=Minibatch_NegSampler(self.G, 1, 'fix_dst'),
+                batch_size=batch_size,
+                shuffle=True,
+                drop_last=False,
+                num_workers=0)
         
         optimizer = torch.optim.AdamW(self.model.parameters(), lr = learning_rate)
 
