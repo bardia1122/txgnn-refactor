@@ -130,7 +130,13 @@ class TxGNN:
         self.G = self.G.to('cpu')
         print('Creating minibatch pretraining dataloader...')
         train_eid_dict = {etype: self.G.edges(form = 'eid', etype =  etype) for etype in self.G.canonical_etypes}
-        sampler = dgl.dataloading.MultiLayerFullNeighborSampler(2)
+
+        # DGL >= 1.0 renamed MultiLayerFullNeighborSampler → NeighborSampler(fanout=-1)
+        if hasattr(dgl.dataloading, 'MultiLayerFullNeighborSampler'):
+            sampler = dgl.dataloading.MultiLayerFullNeighborSampler(2)
+        else:
+            sampler = dgl.dataloading.NeighborSampler([-1, -1])
+
         rel_unique = self.df.relation.unique()
         reverse_etypes = {}
         for rel in rel_unique:
@@ -140,8 +146,10 @@ class TxGNN:
                 reverse_etypes[rel] = 'rev_' + rel
             else:
                 reverse_etypes[rel] = rel
-        
-        dataloader = dgl.dataloading.EdgeDataLoader(
+
+        # DGL >= 1.0 renamed EdgeDataLoader → DataLoader
+        _EdgeDataLoader = getattr(dgl.dataloading, 'EdgeDataLoader', None) or dgl.dataloading.DataLoader
+        dataloader = _EdgeDataLoader(
             self.G, train_eid_dict, sampler,
             negative_sampler=Minibatch_NegSampler(self.G, 1, 'fix_dst'),
             batch_size=batch_size,
