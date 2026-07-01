@@ -1,0 +1,23 @@
+{
+  "macro_auroc": 0.5264844972639837,
+  "macro_auprc": 0.5217395570722252,
+  "micro_auroc": 0.5336842558646193,
+  "micro_auprc": 0.5159152933081084,
+  "loss": 0.7101563811302185,
+  "auroc_per_etype": {
+    "('disease', 'rev_contraindication', 'drug')": 0.528605192232037,
+    "('disease', 'rev_indication', 'drug')": 0.45425786947433033,
+    "('disease', 'rev_off-label use', 'drug')": 0.5327726854085347,
+    "('drug', 'contraindication', 'disease')": 0.6068830209514152,
+    "('drug', 'indication', 'disease')": 0.5151939696511758,
+    "('drug', 'off-label use', 'disease')": 0.5211942458664094
+  },
+  "auprc_per_etype": {
+    "('disease', 'rev_contraindication', 'drug')": 0.5249011823637648,
+    "('disease', 'rev_indication', 'drug')": 0.4527302618898093,
+    "('disease', 'rev_off-label use', 'drug')": 0.5609913283574479,
+    "('drug', 'contraindication', 'disease')": 0.5871459343585206,
+    "('drug', 'indication', 'disease')": 0.5157653852013964,
+    "('drug', 'off-label use', 'disease')": 0.48890325026241266
+  }
+}
