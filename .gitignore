@@ -131,3 +131,5 @@ dmypy.json
 .claude/
 PYG_REFACTOR.md
 mock/
+data/
+comparison_outputs/
