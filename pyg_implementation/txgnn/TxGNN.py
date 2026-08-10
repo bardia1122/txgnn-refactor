@@ -746,7 +746,7 @@ class TxGNN:
             df_temp[self.relation + '_layer1_att'] = scores[0][etype].reshape(-1,)
             df_temp[self.relation + '_layer2_att'] = scores[1][etype].reshape(-1,)
 
-            all_att_df = all_att_df.append(df_temp)
+            all_att_df = pd.concat([all_att_df, df_temp])
 
         all_att_df.to_pickle(os.path.join(path, 'graphmask_output_' + self.relation + '.pkl'))
         return all_att_df
