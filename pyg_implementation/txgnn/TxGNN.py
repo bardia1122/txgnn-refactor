@@ -425,8 +425,9 @@ class TxGNN:
                 continue
             out_deg = degree(self.G[etype].edge_index[0], num_nodes=self.G[src_type].num_nodes)
             in_deg = degree(self.G[etype].edge_index[1], num_nodes=self.G[dst_type].num_nodes)
-            out_degrees[etype] = torch.where(out_deg != 0)
-            in_degrees[etype] = torch.where(in_deg != 0)
+            # keep the indices on cpu: they index `h`, which retrieve_embedding() returns on cpu
+            out_degrees[etype] = torch.where(out_deg.cpu() != 0)
+            in_degrees[etype] = torch.where(in_deg.cpu() != 0)
 
         sim_all_etypes = self.model.pred.sim_all_etypes
         diseaseid2id_etypes = self.model.pred.diseaseid2id_etypes
