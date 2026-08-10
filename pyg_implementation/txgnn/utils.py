@@ -139,9 +139,7 @@ def preprocess_kg(path, split, test_size = 0.05, one_hop = False, mask_ratio = 0
 
 def random_fold(df, fold_seed, frac):
     train_frac, val_frac, test_frac = frac
-    df_train = pd.DataFrame()
-    df_valid = pd.DataFrame()
-    df_test = pd.DataFrame()
+    df_train_l, df_valid_l, df_test_l = [], [], []
     # to avoid extreme minority types don't exist in valid/test
     for i in df.relation.unique():
         df_temp = df[df.relation == i]
@@ -149,9 +147,13 @@ def random_fold(df, fold_seed, frac):
         train_val = df_temp[~df_temp.index.isin(test.index)]
         val = train_val.sample(frac = val_frac/(1-test_frac), replace = False, random_state = 1)
         train = train_val[~train_val.index.isin(val.index)]
-        df_train = df_train.append(train)
-        df_valid = df_valid.append(val)
-        df_test = df_test.append(test)
+        df_train_l.append(train)
+        df_valid_l.append(val)
+        df_test_l.append(test)
+
+    df_train = pd.concat(df_train_l)
+    df_valid = pd.concat(df_valid_l)
+    df_test = pd.concat(df_test_l)
 
     return {'train': df_train.reset_index(drop = True),
             'valid': df_valid.reset_index(drop = True),
@@ -205,9 +207,7 @@ def complex_disease_fold(df, fold_seed, frac):
 
     df = df_not_dd
     train_frac, val_frac, test_frac = frac
-    df_train = pd.DataFrame()
-    df_valid = pd.DataFrame()
-    df_test = pd.DataFrame()
+    df_train_l, df_valid_l, df_test_l = [], [], []
 
     for i in df.relation.unique():
         df_temp = df[df.relation == i]
@@ -215,13 +215,13 @@ def complex_disease_fold(df, fold_seed, frac):
         train_val = df_temp[~df_temp.index.isin(test.index)]
         val = train_val.sample(frac = val_frac/(1-test_frac), replace = False, random_state = 1)
         train = train_val[~train_val.index.isin(val.index)]
-        df_train = df_train.append(train)
-        df_valid = df_valid.append(val)
-        df_test = df_test.append(test)
+        df_train_l.append(train)
+        df_valid_l.append(val)
+        df_test_l.append(test)
 
-    df_train = pd.concat([df_train, df_dd_train])
-    df_valid = pd.concat([df_valid, df_dd_valid])
-    df_test = pd.concat([df_test, df_dd_test])
+    df_train = pd.concat(df_train_l + [df_dd_train])
+    df_valid = pd.concat(df_valid_l + [df_dd_valid])
+    df_test = pd.concat(df_test_l + [df_dd_test])
 
     return {'train': df_train.reset_index(drop = True),
             'valid': df_valid.reset_index(drop = True),
@@ -259,9 +259,7 @@ def few_edeges_to_kg_fold(df, fold_seed, frac):
 
     df = df_not_dd
     train_frac, val_frac, test_frac = frac
-    df_train = pd.DataFrame()
-    df_valid = pd.DataFrame()
-    df_test = pd.DataFrame()
+    df_train_l, df_valid_l, df_test_l = [], [], []
 
     for i in df.relation.unique():
         df_temp = df[df.relation == i]
@@ -269,13 +267,13 @@ def few_edeges_to_kg_fold(df, fold_seed, frac):
         train_val = df_temp[~df_temp.index.isin(test.index)]
         val = train_val.sample(frac = val_frac/(1-test_frac), replace = False, random_state = 1)
         train = train_val[~train_val.index.isin(val.index)]
-        df_train = df_train.append(train)
-        df_valid = df_valid.append(val)
-        df_test = df_test.append(test)
+        df_train_l.append(train)
+        df_valid_l.append(val)
+        df_test_l.append(test)
 
-    df_train = pd.concat([df_train, df_dd_train])
-    df_valid = pd.concat([df_valid, df_dd_valid])
-    df_test = pd.concat([df_test, df_dd_test])
+    df_train = pd.concat(df_train_l + [df_dd_train])
+    df_valid = pd.concat(df_valid_l + [df_dd_valid])
+    df_test = pd.concat(df_test_l + [df_dd_test])
 
     return {'train': df_train.reset_index(drop = True),
             'valid': df_valid.reset_index(drop = True),
@@ -307,9 +305,7 @@ def few_edeges_to_indications_fold(df, fold_seed, frac):
 
     df = df_not_dd
     train_frac, val_frac, test_frac = frac
-    df_train = pd.DataFrame()
-    df_valid = pd.DataFrame()
-    df_test = pd.DataFrame()
+    df_train_l, df_valid_l, df_test_l = [], [], []
 
     for i in df.relation.unique():
         df_temp = df[df.relation == i]
@@ -317,13 +313,13 @@ def few_edeges_to_indications_fold(df, fold_seed, frac):
         train_val = df_temp[~df_temp.index.isin(test.index)]
         val = train_val.sample(frac = val_frac/(1-test_frac), replace = False, random_state = 1)
         train = train_val[~train_val.index.isin(val.index)]
-        df_train = df_train.append(train)
-        df_valid = df_valid.append(val)
-        df_test = df_test.append(test)
+        df_train_l.append(train)
+        df_valid_l.append(val)
+        df_test_l.append(test)
 
-    df_train = pd.concat([df_train, df_dd_train])
-    df_valid = pd.concat([df_valid, df_dd_valid])
-    df_test = pd.concat([df_test, df_dd_test])
+    df_train = pd.concat(df_train_l + [df_dd_train])
+    df_valid = pd.concat(df_valid_l + [df_dd_valid])
+    df_test = pd.concat(df_test_l + [df_dd_test])
 
     return {'train': df_train.reset_index(drop = True),
             'valid': df_valid.reset_index(drop = True),
@@ -357,9 +353,7 @@ def create_fold_cv(df, split_num, num_splits):
 
     df = df_not_dd
     train_frac, val_frac, test_frac = [0.83125, 0.11875, 0.05]
-    df_train = pd.DataFrame()
-    df_valid = pd.DataFrame()
-    df_test = pd.DataFrame()
+    df_train_l, df_valid_l, df_test_l = [], [], []
 
     for i in df.relation.unique():
         df_temp = df[df.relation == i]
@@ -367,13 +361,13 @@ def create_fold_cv(df, split_num, num_splits):
         train_val = df_temp[~df_temp.index.isin(test.index)]
         val = train_val.sample(frac = val_frac/(1-test_frac), replace = False, random_state = 1)
         train = train_val[~train_val.index.isin(val.index)]
-        df_train = df_train.append(train)
-        df_valid = df_valid.append(val)
-        df_test = df_test.append(test)
+        df_train_l.append(train)
+        df_valid_l.append(val)
+        df_test_l.append(test)
 
-    df_train = pd.concat([df_train, df_dd_train])
-    df_valid = pd.concat([df_valid, df_dd_valid])
-    df_test = pd.concat([df_test, df_dd_test])
+    df_train = pd.concat(df_train_l + [df_dd_train])
+    df_valid = pd.concat(df_valid_l + [df_dd_valid])
+    df_test = pd.concat(df_test_l + [df_dd_test])
 
     return df_train.reset_index(drop = True), df_valid.reset_index(drop = True), df_test.reset_index(drop = True)
 
@@ -927,7 +921,7 @@ def reverse_rel_generation(df, df_valid, unique_rel):
         if i[0] != i[2]:
             # bi identity
             temp["relation"] = 'rev_' + i[1]
-        df_valid = df_valid.append(temp)
+        df_valid = pd.concat([df_valid, temp])
     return df_valid.reset_index(drop = True)
 
 
@@ -1538,7 +1532,7 @@ def find_two_hops(x_idx_value, x_type_value, df):
 
     # Find 2-hop neighbors by joining
     two_hop = df.merge(neighbors_df, left_on=['x_idx', 'x_type'], right_on=['idx', 'type'])
-    two_hop = two_hop.append(df.merge(neighbors_df, left_on=['y_idx', 'y_type'], right_on=['idx', 'type']))
+    two_hop = pd.concat([two_hop, df.merge(neighbors_df, left_on=['y_idx', 'y_type'], right_on=['idx', 'type'])])
 
     # Combine 1-hop and 2-hop neighbors and remove duplicates
     return pd.concat([one_hop, two_hop]).drop_duplicates()
