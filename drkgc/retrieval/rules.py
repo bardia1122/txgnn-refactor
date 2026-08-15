@@ -302,6 +302,7 @@ def mine(
     top_k: Optional[int] = None,
     capped: bool = True,
     data: Optional[RankerData] = None,
+    resolve: bool = False,
 ) -> Dict[str, List[Rule]]:
     out_dir = Path(out_dir)
     if data is None:
@@ -322,7 +323,8 @@ def mine(
         rules_by_head[head] = rules
         print(f"  {len(rules)} rules pass support >= {min_support}")
 
-    rules_by_head = resolve_conflicts(rules_by_head)
+    if resolve:
+        rules_by_head = resolve_conflicts(rules_by_head)
 
     rules_dir = out_dir / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
@@ -384,6 +386,13 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--top-k", type=int, default=None,
                         help="keep only the k highest-confidence rules per relation")
     parser.add_argument("--uncapped", action="store_true")
+    parser.add_argument(
+        "--resolve-conflicts", action="store_true",
+        help="when several heads share a body, keep only the highest-confidence "
+             "head (DrKGC appendix A.4). Off by default: our target relations "
+             "share the drug->disease signature, so every body is shared and the "
+             "relation with more edges would take all of them",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     mine(
@@ -394,6 +403,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.min_confidence,
         args.top_k,
         capped=not args.uncapped,
+        resolve=args.resolve_conflicts,
     )
 
 
