@@ -107,6 +107,56 @@ the prompt template.
 
 ---
 
+## Zero-shot: disease prototypes
+
+A disease held out of training has no drug edges, so its embedding is untrained
+noise and the ranker cannot place it. `proto.py` ports TxGNN's answer
+(`pyg_implementation/txgnn/model.py`, `DistMultPredictor` proto-learning):
+describe each disease by its neighbours in the context graph, find the most
+similar *training* diseases, and mix their embeddings into the query's.
+
+```bash
+# try it post-hoc on a model you already trained - seconds, no retraining
+python -m drkgc.ranker.rank --out-dir drkgc/data_holdout \
+    --model-dir drkgc/models/rgcn_holdout -k 20 --proto rarity
+
+# if it helps, train with it so the encoder learns around it
+python -m drkgc.ranker.train --out-dir drkgc/data_holdout \
+    --model-dir drkgc/models/rgcn_holdout_proto --proto rarity
+
+# inspect the prototype context alone
+python -m drkgc.ranker.proto --out-dir drkgc/data_holdout
+```
+
+`--proto rarity` is TxGNN's default (`proto_num=5`, `exp_lambda=0.7`):
+`alpha = lambda*exp(-lambda*degree) + 0.2`, so a disease with **zero** training
+edges takes 90% of its embedding from the prototype while well-connected
+diseases barely move. Other modes: `avg` (50/50), `heuristics-0.8` (20%
+prototype), `100proto` (prototype only). `rank.py` inherits whatever the
+checkpoint was trained with; `--proto` overrides it for experiments.
+
+Two deliberate deviations from TxGNN, both in `proto.py`'s docstring: the
+context is built once over all target relations rather than per relation (with
+a shared disease partition a held-out disease has no edges of *any* target
+relation), and self-matches are masked explicitly rather than via TxGNN's
+"drop column 0 during training" shape heuristic.
+
+**The profile is only as good as the context graph.** With the default
+auxiliary relations it is built from `disease_protein` alone — TxGNN's
+`protein_profile` variant. TxGNN's own default (`all_nodes_profile`) also uses
+`disease_disease`, which is usually the stronger similarity signal. To match it,
+rebuild step 1 with that relation included:
+
+```bash
+python -m drkgc.data_prep.run_all --split disease_holdout --out-dir drkgc/data_holdout \
+    --aux-relations drug_protein disease_protein protein_protein disease_disease --force
+```
+
+That helps twice over: better prototypes, and `disease_disease` edges also give
+the R-GCN a path into held-out diseases during message passing. It needs a
+retrain, and it does not leak — `disease_disease` is not a target relation, and
+the leakage check still runs.
+
 ## What to expect
 
 On the **random split**, this is the setting the paper's R-GCN number comes from

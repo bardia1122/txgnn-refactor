@@ -64,11 +64,14 @@ def load_model(model_dir: Path, num_entities: int, num_relations: int, device):
     return model, checkpoint
 
 
-def export_embeddings(model, data: RankerData, edge_index, edge_type, model_dir: Path):
+def export_embeddings(model, data: RankerData, edge_index, edge_type, model_dir: Path,
+                      proto_ctx=None):
     import torch
 
     with torch.no_grad():
         z = model.encode(edge_index, edge_type)
+        if proto_ctx is not None:
+            z = proto_ctx.apply(z)
     path = model_dir / "global_embeddings.pt"
     torch.save(
         {
@@ -198,6 +201,7 @@ def run(
     capped: bool = True,
     device: str = "auto",
     filter_mode: str = "all",
+    proto: Optional[str] = None,
 ) -> Dict:
     import torch
 
@@ -214,7 +218,32 @@ def run(
 
     edge_index = torch.as_tensor(data.edge_index, dtype=torch.long, device=device)
     edge_type = torch.as_tensor(data.edge_type, dtype=torch.long, device=device)
-    z = export_embeddings(model, data, edge_index, edge_type, model_dir)
+
+    # the prototype defaults to whatever the checkpoint was trained with; pass
+    # --proto to override, which lets you try it post-hoc on an existing model
+    config = checkpoint.get("config", {})
+    proto_mode = proto if proto is not None else config.get("proto", "none")
+    proto_ctx = None
+    if proto_mode and proto_mode != "none":
+        from drkgc.ranker.proto import build_prototype_context
+        from drkgc.ranker.proto import describe as describe_proto
+
+        proto_ctx = build_prototype_context(
+            data, out_dir,
+            proto_num=config.get("proto_num", 5),
+            agg_measure=proto_mode,
+            exp_lambda=config.get("exp_lambda", 0.7),
+            capped=capped,
+        )
+        print(describe_proto(proto_ctx))
+        proto_ctx.to_torch(device)
+        if proto is not None and proto != config.get("proto", "none"):
+            print(
+                f"  note: applying prototype {proto!r} post-hoc to a model trained "
+                f"with proto={config.get('proto', 'none')!r}"
+            )
+
+    z = export_embeddings(model, data, edge_index, edge_type, model_dir, proto_ctx)
 
     candidates_dir = out_dir / "candidates"
     candidates_dir.mkdir(parents=True, exist_ok=True)
@@ -251,6 +280,8 @@ def run(
         "k": k,
         "direction": direction,
         "filter_mode": filter_mode,
+        "proto": proto_mode,
+        "prototype": proto_ctx.stats if proto_ctx is not None else None,
         "checkpoint_epoch": checkpoint.get("epoch"),
         "checkpoint_valid_mrr": checkpoint.get("valid_mrr"),
         "summary": summary,
@@ -278,6 +309,11 @@ def main(argv: Iterable[str] | None = None) -> None:
                              "top-k: 'all' is the standard filtered protocol, 'train' "
                              "only removes training triples")
     parser.add_argument("--uncapped", action="store_true")
+    parser.add_argument(
+        "--proto", default=None,
+        choices=["none", "rarity", "avg", "heuristics-0.8", "100proto"],
+        help="override the checkpoint's prototype setting (post-hoc experiments)",
+    )
     parser.add_argument("--device", default="auto")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -291,6 +327,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         capped=not args.uncapped,
         device=args.device,
         filter_mode=args.filter_mode,
+        proto=args.proto,
     )
 
 

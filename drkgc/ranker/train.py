@@ -92,6 +92,14 @@ def _pool_positions(pool, num_entities: int):
     return positions
 
 
+def encode(model, edge_index, edge_type, proto_ctx=None):
+    """Encode the graph, applying the zero-shot disease prototype if enabled."""
+    z = model.encode(edge_index, edge_type)
+    if proto_ctx is not None:
+        z = proto_ctx.apply(z)
+    return z
+
+
 def evaluate(
     model,
     data: RankerData,
@@ -103,6 +111,7 @@ def evaluate(
     mode: str = "head",
     batch_size: int = 128,
     z=None,
+    proto_ctx=None,
 ) -> Dict[str, float]:
     """Filtered MRR / Hits@k for one relation and one evaluation split."""
     import torch
@@ -113,7 +122,7 @@ def evaluate(
     model.eval()
     with torch.no_grad():
         if z is None:
-            z = model.encode(edge_index, edge_type)
+            z = encode(model, edge_index, edge_type, proto_ctx)
 
         rel_id = data.rel2id[relation]
         results: Dict[str, List[float]] = {}
@@ -184,11 +193,12 @@ def evaluate_all(
     edge_type,
     relations: Sequence[str] = TARGET_RELATIONS,
     mode: str = "head",
+    proto_ctx=None,
 ) -> Dict[str, Dict[str, float]]:
     import torch
 
     with torch.no_grad():
-        z = model.encode(edge_index, edge_type)
+        z = encode(model, edge_index, edge_type, proto_ctx)
     out = {
         relation: evaluate(
             model, data, data.eval_triples[(relation, split)], relation, device,
@@ -229,6 +239,9 @@ def train(
     train_on_aux: bool = True,
     device: str = "auto",
     seed: int = SEED,
+    proto: str = "none",
+    proto_num: int = 5,
+    exp_lambda: float = 0.7,
 ) -> Dict:
     import torch
     import torch.nn.functional as F
@@ -262,6 +275,19 @@ def train(
         for r, p in data.tail_pool.items()
     }
 
+    proto_ctx = None
+    if proto != "none":
+        from drkgc.ranker.proto import build_prototype_context
+        from drkgc.ranker.proto import describe as describe_proto
+
+        print(f"\nBuilding zero-shot disease prototypes (agg={proto}) ...")
+        proto_ctx = build_prototype_context(
+            data, out_dir, proto_num=proto_num, agg_measure=proto,
+            exp_lambda=exp_lambda, capped=capped,
+        )
+        print(describe_proto(proto_ctx))
+        proto_ctx.to_torch(device)
+
     model = RGCNRanker(
         data.entities.num_entities, data.num_relations, dim, num_layers, num_bases, dropout
     ).to(device)
@@ -287,7 +313,7 @@ def train(
             batch = train_triples[permutation[start : start + batch_size]]
             optimiser.zero_grad()
 
-            z = model.encode(edge_index, edge_type)
+            z = encode(model, edge_index, edge_type, proto_ctx)
             pos_score = model.score(z, batch)
             negatives = sample_negatives(
                 batch, data, pools_head, pools_tail, num_negatives, generator
@@ -308,7 +334,8 @@ def train(
         line = f"epoch {epoch:>4}  loss {epoch_loss:.4f}  ({time.time() - started:.1f}s)"
 
         if epoch % eval_every == 0 or epoch == epochs:
-            metrics = evaluate_all(model, data, "valid", device, edge_index, edge_type, mode=mode)
+            metrics = evaluate_all(model, data, "valid", device, edge_index, edge_type,
+                                   mode=mode, proto_ctx=proto_ctx)
             score = mean_mrr(metrics)
             line += f"  valid MRR {score:.4f}"
             history.append({"epoch": epoch, "loss": epoch_loss, "valid": metrics})
@@ -330,6 +357,9 @@ def train(
                             "capped": capped,
                             "train_on_aux": train_on_aux,
                             "seed": seed,
+                            "proto": proto,
+                            "proto_num": proto_num,
+                            "exp_lambda": exp_lambda,
                         },
                         "epoch": epoch,
                         "valid_mrr": score,
@@ -355,8 +385,10 @@ def train(
     checkpoint = torch.load(model_dir / "model.pt", map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["state_dict"])
     final = {
-        "valid": evaluate_all(model, data, "valid", device, edge_index, edge_type, mode=mode),
-        "test": evaluate_all(model, data, "test", device, edge_index, edge_type, mode=mode),
+        "valid": evaluate_all(model, data, "valid", device, edge_index, edge_type,
+                              mode=mode, proto_ctx=proto_ctx),
+        "test": evaluate_all(model, data, "test", device, edge_index, edge_type,
+                             mode=mode, proto_ctx=proto_ctx),
     }
 
     report = {
@@ -365,6 +397,7 @@ def train(
         "mode": mode,
         "metrics": final,
         "dataset": data.meta,
+        "prototype": proto_ctx.stats if proto_ctx is not None else None,
         "hyperparameters": {
             "dim": dim, "num_layers": num_layers, "num_bases": num_bases,
             "dropout": dropout, "lr": lr, "weight_decay": weight_decay,
@@ -413,6 +446,17 @@ def main(argv: Iterable[str] | None = None) -> None:
                         help="use auxiliary edges for message passing only")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument(
+        "--proto", default="none",
+        choices=["none", "rarity", "avg", "heuristics-0.8", "100proto"],
+        help="TxGNN-style prototype embeddings for zero-shot diseases; 'rarity' "
+             "is TxGNN's default and leans on the prototype in inverse "
+             "proportion to a disease's training degree",
+    )
+    parser.add_argument("--proto-num", type=int, default=5,
+                        help="number of similar training diseases to borrow from")
+    parser.add_argument("--exp-lambda", type=float, default=0.7,
+                        help="rarity decay: alpha = lambda*exp(-lambda*degree)+0.2")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     train(
@@ -434,6 +478,9 @@ def main(argv: Iterable[str] | None = None) -> None:
         train_on_aux=not args.no_aux_supervision,
         device=args.device,
         seed=args.seed,
+        proto=args.proto,
+        proto_num=args.proto_num,
+        exp_lambda=args.exp_lambda,
     )
 
 
