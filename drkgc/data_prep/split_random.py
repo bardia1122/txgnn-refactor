@@ -45,8 +45,12 @@ def get_random_split(
     head_col: str = "head_idx",
     tail_col: str = "tail_idx",
     on_violation: str = "reassign",
+    **_ignored,
 ) -> SplitResult:
     """Shuffle `triples` and cut them into an entity-safe train/valid/test split.
+
+    Accepts and ignores the extra keyword arguments the other strategies take
+    (`area`, `df`, ...) so `run_all` can call every strategy uniformly.
 
     Parameters
     ----------

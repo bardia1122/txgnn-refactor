@@ -106,6 +106,11 @@ def extract_relation_triples(
             "tail_id": forward["y_id"].astype(str).values,
         }
     )
+    if "split" in forward.columns:
+        # disease-area KGs carry TxGNN's train/test marker; keep it so the
+        # disease-area split can use it (see split_disease_area.py)
+        out["split"] = forward["split"].astype(str).values
+
     out = out.drop_duplicates(subset=["head_idx", "tail_idx"]).reset_index(drop=True)
 
     head_names = id2name.get(head_type, {})
@@ -120,7 +125,8 @@ def extract_relation_triples(
             f"  warning: unresolved names - {n_missing_head} heads, "
             f"{n_missing_tail} tails (left as empty strings)."
         )
-    return out[TRIPLE_COLUMNS]
+    columns = TRIPLE_COLUMNS + (["split"] if "split" in out.columns else [])
+    return out[columns]
 
 
 def triple_stats(triples: pd.DataFrame) -> Dict[str, int]:
@@ -138,14 +144,19 @@ def extract_all(
     out_dir: Path = DEFAULT_OUT_DIR,
     relations: Sequence[str] = TARGET_RELATIONS,
     df: pd.DataFrame | None = None,
+    area: str | None = None,
 ) -> Dict[str, pd.DataFrame]:
-    """Extract every target relation and write the CSVs. Returns {relation: df}."""
+    """Extract every target relation and write the CSVs. Returns {relation: df}.
+
+    With `area` set, the disease-area KG is used, and the resulting tables carry
+    TxGNN's `split` column.
+    """
     data_folder, out_dir = Path(data_folder), Path(out_dir)
     triples_dir = out_dir / TRIPLES_DIR
     triples_dir.mkdir(parents=True, exist_ok=True)
 
     if df is None:
-        df = load_kg_directed(data_folder)
+        df = load_kg_directed(data_folder, area=area)
     print(f"Loaded directed KG: {len(df):,} edges")
 
     # a small inventory dump makes the NOTES/README reproducible on any machine
@@ -194,9 +205,11 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--data-folder", default=str(DEFAULT_KG_FOLDER))
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--relations", nargs="+", default=list(TARGET_RELATIONS))
+    parser.add_argument("--area", default=None,
+                        help="use the disease-area KG for this area instead of the full KG")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    extract_all(Path(args.data_folder), Path(args.out_dir), args.relations)
+    extract_all(Path(args.data_folder), Path(args.out_dir), args.relations, area=args.area)
 
 
 if __name__ == "__main__":

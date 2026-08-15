@@ -45,11 +45,42 @@ python -m drkgc.data_prep.test_sanity --out-dir drkgc/data
 
 `test_sanity` exits non-zero if any check fails.
 
+### Zero-shot splits
+
+```bash
+# hold out whole diseases at random (TxGNN's 'complex_disease' semantics)
+python -m drkgc.data_prep.run_all --split disease_holdout --out-dir drkgc/data_holdout
+
+# hold out an ontology-defined disease area
+python -m drkgc.data_prep.run_all --split disease_area --area cardiovascular \
+    --out-dir drkgc/data_cardiovascular
+```
+
+Use a **separate `--out-dir` per split** — `run_all` refuses to overwrite a
+directory built with a different strategy unless you pass `--force`.
+
+`--split disease_area` needs the area-specific KG, which is generated on first
+use by `preprocess_kg(data_folder, split=<area>)`: it walks the Disease Ontology
+and marks, as held out, every drug-disease edge touching the area plus a sample
+of its 2-hop neighbourhood. Expect another slow pass, **per area**. Two things
+the code handles for you:
+
+* `DataSplitter` reads `node.csv` **tab-separated**, but the PrimeKG release
+  ships a comma-separated `nodes.csv` — it is transcoded automatically;
+* TxGNN samples those neighbourhood edges with an unseeded `np.random.choice`
+  (`datasplit.py:109`), so we seed the global numpy RNG first to make the
+  generated KG reproducible.
+
+For an area KG the context graph is built from `split == 'train'` rows only
+(`--split-filter`). That is what keeps the setting genuinely zero-shot: without
+it the held-out diseases keep their gene associations and leak straight back in.
+
 ### Useful flags
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--split` | `random` | split strategy; the swap point for the future `disease_area` split |
+| `--split` | `random` | `random`, `disease_holdout` or `disease_area` |
+| `--area` | – | disease area to hold out (required for `disease_area`) |
 | `--fracs` | `0.90 0.05 0.05` | train / valid / test fractions |
 | `--seed` | `42` | seeds the shuffle *and* the degree-cap subsampling |
 | `--on-violation` | `reassign` | what to do with entity-unsafe valid/test triples (`reassign` to train, or `drop`) |
@@ -199,12 +230,15 @@ relation, leakage PASSED/FAILED, cap value and max-degree before → after).
   shuffled order establishes the invariant. `test_sanity` re-derives it from the
   written CSVs rather than trusting the run.
 * **Swappable split.** `split_base.py` defines the contract (`SplitResult`,
-  `enforce_entity_safety`, `compute_split_stats`, `SPLIT_REGISTRY`);
-  `split_random.get_random_split` is one implementation, registered as
-  `'random'`. A future `split_disease_area.get_disease_area_split` with the same
-  signature registers as `'disease_area'` and is selected with
-  `run_all.py --split disease_area`. See `NOTES.md §4` for where TxGNN's
-  existing disease-area logic lives.
+  `enforce_entity_safety`, `compute_split_stats`, `SPLIT_REGISTRY`). Three
+  implementations register against it: `random` (`split_random.py`),
+  `disease_holdout` and `disease_area` (`split_disease_area.py`). Adding another
+  is a function plus a `@register_split` decorator.
+* **Entity safety means something different in a zero-shot split.** For
+  `random`, both drugs and diseases in valid/test must occur in train. For the
+  zero-shot splits the *whole point* is that test diseases never occur in train,
+  so only drug-side safety is enforced; `test_sanity` inverts its check
+  accordingly and asserts the held-out diseases really are absent from train.
 * **Degree capping.** Degree is *incident* degree in the auxiliary graph (every
   edge touching the node, any relation, either orientation). Nodes are processed
   in descending-degree order and their remaining incident edges are randomly

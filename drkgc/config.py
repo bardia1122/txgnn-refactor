@@ -41,6 +41,22 @@ def _detect_kg_folder() -> Path:
 #: where kg.csv lives and where kg_directed.csv will be written
 DEFAULT_KG_FOLDER = _detect_kg_folder()
 
+
+def _detect_disease_files() -> Path:
+    """Folder holding the per-disease-area node lists (`<area>.csv`).
+
+    `process_disease_area_split` expects `<data_folder>/disease_files`, but in
+    this repo they live in `REPO_ROOT/data/disease_files` while the KG sits in
+    `REPO_ROOT/data/kg`.
+    """
+    for candidate in (DEFAULT_KG_FOLDER / "disease_files", REPO_ROOT / "data" / "disease_files"):
+        if candidate.is_dir():
+            return candidate
+    return REPO_ROOT / "data" / "disease_files"
+
+
+DISEASE_FILES_DIR = _detect_disease_files()
+
 #: root for every artifact this package produces
 DRKGC_ROOT = REPO_ROOT / "drkgc"
 DEFAULT_OUT_DIR = DRKGC_ROOT / "data"
@@ -81,6 +97,27 @@ SEED = 42
 
 #: train / valid / test fractions for the entity-safe random split
 SPLIT_FRACS = (0.90, 0.05, 0.05)
+
+#: fractions over *diseases* for the zero-shot disease-holdout split.
+#: Same numbers TxGNN uses for its 'complex_disease' split (`utils.py:407`).
+ZERO_SHOT_FRACS = (0.83125, 0.11875, 0.05)
+
+#: share of the disease-area training pool held out for validation.
+#: TxGNN uses random_fold(train_val, [0.875, 0.125, 0.0]) — `utils.py:395`.
+AREA_VALID_FRAC = 0.125
+
+#: the nine disease areas shipped in data/disease_files/ (TxData.prepare_split)
+DISEASE_AREAS = (
+    "adrenal_gland",
+    "anemia",
+    "autoimmune",
+    "cardiovascular",
+    "cell_proliferation",
+    "diabetes",
+    "mental_health",
+    "metabolic_disorder",
+    "neurodigenerative",
+)
 
 #: default degree cap = this percentile of the gene/protein degree distribution
 DEGREE_CAP_PERCENTILE = 95.0
