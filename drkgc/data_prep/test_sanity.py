@@ -97,24 +97,29 @@ def check_splits(out_dir: Path, relations: Sequence[str]) -> None:
             train_heads = set(result.train.head_idx)
             train_tails = set(result.train.tail_idx)
 
+            problems = []
             for name in ("valid", "test"):
                 part = getattr(result, name)
                 unseen_h = set(part.head_idx) - train_heads
-                assert not unseen_h, f"{name}: {len(unseen_h)} drugs never seen in train"
+                if unseen_h:
+                    problems.append(f"{name}: {len(unseen_h)} drugs never seen in train")
 
                 unseen_t = set(part.tail_idx) - train_tails
                 if not zero_shot:
-                    assert not unseen_t, (
-                        f"{name}: {len(unseen_t)} diseases never seen in train"
-                    )
+                    if unseen_t:
+                        problems.append(
+                            f"{name}: {len(unseen_t)} diseases never seen in train"
+                        )
                 elif len(part):
                     # the defining property of a zero-shot split: held-out
                     # diseases must NOT be reachable through a train triple
                     leaked = set(part.tail_idx) & train_tails
-                    assert not leaked, (
-                        f"{name}: {len(leaked)} held-out diseases also appear in "
-                        f"train - the split is not zero-shot"
-                    )
+                    if leaked:
+                        problems.append(
+                            f"{name}: {len(leaked)} held-out diseases also appear in "
+                            "train - the split is not zero-shot"
+                        )
+            assert not problems, "; ".join(problems)
             kind = "zero-shot" if zero_shot else "entity-safe"
             return (
                 f"{result.strategy} ({kind}): train={len(result.train):,} "
@@ -291,7 +296,11 @@ def check_pyg_graphs(out_dir: Path) -> None:
             path = ctx_dir / pt_name
             assert path.exists(), f"{path} missing (was --no-pyg used?)"
             data = load_context_graph(path)
-            edges = pd.read_csv(ctx_dir / csv_name, keep_default_na=False)
+            edges = pd.read_csv(
+                ctx_dir / csv_name,
+                dtype={"head_id": str, "tail_id": str},
+                keep_default_na=False,
+            )
             total = sum(data[et].edge_index.shape[1] for et in data.edge_types)
             assert total == len(edges), (
                 f"{pt_name} has {total:,} edges, {csv_name} has {len(edges):,}"
