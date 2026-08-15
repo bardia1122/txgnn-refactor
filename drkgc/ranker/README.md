@@ -74,9 +74,15 @@ inference, where only drugs are ever ranked.
 **Evaluation is filtered** (Bordes et al. 2013): other entities forming a known
 true triple with the same query are removed before ranking, using
 train+valid+test as the filter set. Ties are optimistic
-(`rank = 1 + #{strictly higher}`). Candidate *generation* filters against the
-**training** triples only, and never removes the gold — so `recall@k` is a
-meaningful ceiling on what the LLM can achieve downstream.
+(`rank = 1 + #{strictly higher}`).
+
+Candidate generation uses the same filter by default (`--filter all`), so the
+MRR `rank.py` prints matches the one `train.py` reports. `--filter train`
+removes only *training* triples, leaving other held-out true drugs in the
+ranking to compete with the gold — a harsher, deployment-like setting. The gap
+between the two is large for relations with many true drugs per disease:
+contraindication averages ~26 drugs per disease against indication's ~7, so it
+loses far more when its sibling answers are left in.
 
 ### Outputs
 

@@ -8,11 +8,12 @@
    in the LLM prompt (the paper uses k = 20).
 
 Candidate generation follows DrKGC: for a query `(?, r, t)` every entity of the
-right type is scored and the top k are kept, with entities that already form a
-**training** triple removed — but never the gold answer, so the candidate set
-remains a fair evaluation target. The gold's rank inside the full ranking is
-recorded as `gold_rank`, and `gold_in_candidates` tells you the ceiling the LLM
-can reach on that split.
+right type is scored and the top k are kept, with known-true answers removed —
+but never the gold, so the candidate set stays a fair evaluation target.
+`--filter all` (default) removes every known triple, the standard filtered
+protocol; `--filter train` removes only training triples, which is harsher and
+matches a deployment setting. The gold's rank in the full ranking is recorded as
+`gold_rank`, and `gold_in_candidates` gives the ceiling the LLM can reach.
 """
 
 from __future__ import annotations
@@ -93,8 +94,23 @@ def candidates_for_split(
     k: int = DEFAULT_K,
     direction: str = "head",
     batch_size: int = 128,
+    filter_mode: str = "all",
 ) -> pd.DataFrame:
-    """Top-k candidates for every query triple of one relation/split."""
+    """Top-k candidates for every query triple of one relation/split.
+
+    `filter_mode` controls which known-true answers are removed from the ranking
+    before the top-k is taken (the gold is never removed):
+
+    ``all``
+        The standard *filtered* protocol (Bordes et al. 2013) — every known
+        triple in train+valid+test. Use this for anything you compare against
+        published numbers, and for building the LLM's candidate sets: other
+        held-out true drugs for the same disease are correct answers, so letting
+        them crowd out the gold understates the ceiling for no good reason.
+    ``train``
+        Only training triples are removed. Harsher, and closer to a deployment
+        setting where the held-out answers genuinely are not known yet.
+    """
     import torch
 
     triples = data.eval_triples.get((relation, split))
@@ -107,7 +123,7 @@ def candidates_for_split(
     idx_of = dict(zip(table.global_id, table.node_idx))
 
     pool_np = data.head_pool[relation] if direction == "head" else data.tail_pool[relation]
-    pool = torch.as_tensor(pool_np, dtype=torch.long, device=device)
+    pool = torch.as_tensor(np.array(pool_np), dtype=torch.long, device=device)
     positions = torch.full((data.entities.num_entities,), -1, dtype=torch.long, device=device)
     positions[pool] = torch.arange(len(pool), device=device)
     candidate_emb = z[pool]
@@ -129,12 +145,13 @@ def candidates_for_split(
                 query = int(triple[anchor_col])
                 row_scores = scores[i].clone()
 
-                # rank over everything except *other* known-true training answers
-                known = (
-                    data.train_heads.get((rel_id, int(triple[2])), set())
-                    if direction == "head"
-                    else data.train_tails.get((int(triple[0]), rel_id), set())
-                )
+                # rank over everything except *other* known-true answers
+                if direction == "head":
+                    source = data.true_heads if filter_mode == "all" else data.train_heads
+                    known = source.get((rel_id, int(triple[2])), set())
+                else:
+                    source = data.true_tails if filter_mode == "all" else data.train_tails
+                    known = source.get((int(triple[0]), rel_id), set())
                 drop = [g for g in known if g != gold]
                 if drop:
                     pos = positions[torch.as_tensor(drop, device=device)]
@@ -180,6 +197,7 @@ def run(
     direction: str = "head",
     capped: bool = True,
     device: str = "auto",
+    filter_mode: str = "all",
 ) -> Dict:
     import torch
 
@@ -205,13 +223,15 @@ def run(
     for relation in relations:
         for split in splits:
             frame = candidates_for_split(
-                model, data, z, relation, split, device, k=k, direction=direction
+                model, data, z, relation, split, device, k=k, direction=direction,
+                filter_mode=filter_mode,
             )
             if frame.empty:
                 print(f"  {relation}/{split}: no triples, skipped")
                 continue
             slug = relation.replace(" ", "_").replace("/", "_")
-            path = candidates_dir / f"{slug}_{split}_candidates.csv"
+            suffix = "" if filter_mode == "all" else f"_{filter_mode}filtered"
+            path = candidates_dir / f"{slug}_{split}_candidates{suffix}.csv"
             frame.to_csv(path, index=False)
 
             recall = float(frame.gold_in_candidates.mean())
@@ -230,11 +250,13 @@ def run(
     report = {
         "k": k,
         "direction": direction,
+        "filter_mode": filter_mode,
         "checkpoint_epoch": checkpoint.get("epoch"),
         "checkpoint_valid_mrr": checkpoint.get("valid_mrr"),
         "summary": summary,
     }
-    (candidates_dir / "candidates_report.json").write_text(json.dumps(report, indent=2))
+    suffix = "" if filter_mode == "all" else f"_{filter_mode}filtered"
+    (candidates_dir / f"candidates_report{suffix}.json").write_text(json.dumps(report, indent=2))
     print(
         f"\nrecall@{k} is the ceiling for the LLM on each split - it can only pick "
         "an answer that made the candidate set."
@@ -250,6 +272,11 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--splits", nargs="+", default=["valid", "test"])
     parser.add_argument("-k", "--top-k", type=int, default=DEFAULT_K)
     parser.add_argument("--direction", choices=["head", "tail"], default="head")
+    parser.add_argument("--filter", dest="filter_mode", choices=["all", "train"],
+                        default="all",
+                        help="which known-true answers to remove before taking the "
+                             "top-k: 'all' is the standard filtered protocol, 'train' "
+                             "only removes training triples")
     parser.add_argument("--uncapped", action="store_true")
     parser.add_argument("--device", default="auto")
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -263,6 +290,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.direction,
         capped=not args.uncapped,
         device=args.device,
+        filter_mode=args.filter_mode,
     )
 
 

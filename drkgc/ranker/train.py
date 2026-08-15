@@ -122,7 +122,7 @@ def evaluate(
             pool_np = (
                 data.head_pool[relation] if direction == "head" else data.tail_pool[relation]
             )
-            pool = torch.as_tensor(pool_np, dtype=torch.long, device=device)
+            pool = torch.as_tensor(np.array(pool_np), dtype=torch.long, device=device)
             positions = _pool_positions(pool, data.entities.num_entities)
             candidates = z[pool]
             filter_map = data.true_heads if direction == "head" else data.true_tails
@@ -254,11 +254,11 @@ def train(
     train_triples = torch.as_tensor(data.train_triples, dtype=torch.long, device=device)
 
     pools_head = {
-        data.rel2id[r]: torch.as_tensor(p, dtype=torch.long, device=device)
+        data.rel2id[r]: torch.as_tensor(np.array(p), dtype=torch.long, device=device)
         for r, p in data.head_pool.items()
     }
     pools_tail = {
-        data.rel2id[r]: torch.as_tensor(p, dtype=torch.long, device=device)
+        data.rel2id[r]: torch.as_tensor(np.array(p), dtype=torch.long, device=device)
         for r, p in data.tail_pool.items()
     }
 
