@@ -74,13 +74,20 @@ def _enforce_drug_safety(
 
     Implemented by passing the head column as both key columns, so
     `enforce_entity_safety` never inspects the tail.
+
+    Violations are **dropped, not reassigned**. Reassigning would move the
+    offending triple into train — and with it the held-out disease, which would
+    then appear in train and destroy the zero-shot property the whole split
+    exists for. Dropping costs a handful of evaluation triples, and those are
+    triples whose drug has no trained embedding anyway, so they could only add
+    noise to the metrics.
     """
     train, held_out, info = enforce_entity_safety(
         train,
         {"valid": valid, "test": test},
         head_col=head_col,
         tail_col=head_col,
-        on_violation="reassign",
+        on_violation="drop",
     )
     return train, held_out["valid"], held_out["test"], info
 
@@ -117,10 +124,12 @@ def _finalise(
     result.stats = compute_split_stats(result)
     result.stats.update(extra_stats)
     result.stats["entity_safety"] = {
-        "policy": "reassign_heads_only",
+        "policy": "drop_heads_only",
         "note": (
-            "drug-side safety enforced; disease-side deliberately violated - "
-            "held-out diseases are unseen in train, that is the zero-shot setting"
+            "drug-side safety enforced by dropping violating eval triples "
+            "(reassigning them would pull their held-out disease into train); "
+            "disease-side safety deliberately not enforced - held-out diseases "
+            "are unseen in train, that is the zero-shot setting"
         ),
         **safety_info,
     }
