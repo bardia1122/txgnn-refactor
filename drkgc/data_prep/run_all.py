@@ -120,6 +120,22 @@ def run(
     _banner(3, f"Splitting target triples ({split_strategy})")
     split_fn = get_split_fn(split_strategy)
     report["splits"] = {}
+
+    # the disease holdout must be shared across relations, or a disease held out
+    # for indication could still be seen through contraindication
+    disease_partition = None
+    if split_strategy == "disease_holdout":
+        from drkgc.data_prep.split_disease_area import compute_disease_partition
+
+        disease_partition = compute_disease_partition(list(triples.values()), seed=seed)
+        report["disease_partition"] = {
+            k: int(len(v)) for k, v in disease_partition.items()
+        }
+        print(
+            "shared disease partition: "
+            + ", ".join(f"{k}={len(v):,}" for k, v in disease_partition.items())
+        )
+
     for relation, table in triples.items():
         print(f"\n{relation}: {len(table):,} triples")
         result = split_fn(
@@ -130,6 +146,7 @@ def run(
             area=area,
             df=df,
             data_folder=data_folder,
+            disease_partition=disease_partition,
         )
         save_split(result, relation, out_dir)
         report["splits"][relation] = result.stats
