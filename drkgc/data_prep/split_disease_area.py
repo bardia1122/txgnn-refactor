@@ -30,7 +30,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Dict, Iterable, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -133,11 +133,36 @@ def _finalise(
 # ---------------------------------------------------------------------------
 
 
+def compute_disease_partition(
+    triple_tables: Sequence[pd.DataFrame],
+    fracs: Sequence[float] = ZERO_SHOT_FRACS,
+    seed: int = SEED,
+) -> Dict[str, np.ndarray]:
+    """Partition the diseases **once, across every target relation**.
+
+    This has to be shared. `complex_disease_fold` (`utils.py:194-199`) takes
+    `df_dd.y_idx.unique()` over *all* drug-disease relations at once, so a
+    held-out disease loses its indication **and** contraindication edges
+    together. Partitioning each relation separately would leave a disease that
+    is held out for indication still connected through contraindication — the
+    R-GCN would see it during training and the split would not be zero-shot.
+    """
+    diseases = pd.concat([t.tail_idx for t in triple_tables]).unique()
+    np.random.seed(seed)
+    np.random.shuffle(diseases)
+    train_d, valid_d, test_d = np.split(
+        diseases,
+        [int(fracs[0] * len(diseases)), int((fracs[0] + fracs[1]) * len(diseases))],
+    )
+    return {"train": train_d, "valid": valid_d, "test": test_d}
+
+
 @register_split("disease_holdout")
 def get_disease_holdout_split(
     triples: pd.DataFrame,
     fracs: Sequence[float] = ZERO_SHOT_FRACS,
     seed: int = SEED,
+    disease_partition: Optional[Dict[str, np.ndarray]] = None,
     **_ignored,
 ) -> SplitResult:
     """Split by disease: every disease belongs to exactly one of train/valid/test.
@@ -145,17 +170,20 @@ def get_disease_holdout_split(
     Mirrors `complex_disease_fold` (`utils.py:194-206`) — same
     `np.random.seed` + `np.random.shuffle` + `np.split` over the unique
     diseases, so with the same seed the disease partition matches TxGNN's.
+
+    `disease_partition` must be the partition shared by every target relation
+    (see :func:`compute_disease_partition`). It is computed from this relation
+    alone only when the caller passes nothing, which is correct just for a
+    single-relation dataset.
     """
     if len(triples) == 0:
         raise ValueError("no triples to split")
 
-    diseases = triples.tail_idx.unique()
-    np.random.seed(seed)
-    np.random.shuffle(diseases)
-    train_d, valid_d, test_d = np.split(
-        diseases,
-        [int(fracs[0] * len(diseases)), int((fracs[0] + fracs[1]) * len(diseases))],
-    )
+    if disease_partition is None:
+        disease_partition = compute_disease_partition([triples], fracs, seed)
+    train_d = disease_partition["train"]
+    valid_d = disease_partition["valid"]
+    test_d = disease_partition["test"]
 
     train = triples[triples.tail_idx.isin(train_d)]
     valid = triples[triples.tail_idx.isin(valid_d)]
@@ -284,14 +312,20 @@ def split_all(
           "disease_holdout": get_disease_holdout_split}[strategy]
     df = load_kg_directed(data_folder, area=area, seed=seed) if strategy == "disease_area" else None
 
+    tables = {relation: load_triples(out_dir, relation) for relation in relations}
+    partition = (
+        compute_disease_partition(list(tables.values()), seed=seed)
+        if strategy == "disease_holdout"
+        else None
+    )
+
     out = {}
-    for relation in relations:
-        triples = load_triples(out_dir, relation)
+    for relation, triples in tables.items():
         print(f"\nSplitting {relation!r} ({strategy}): {len(triples):,} triples")
         result = (
             fn(triples, area=area, df=df, data_folder=data_folder, seed=seed, **kwargs)
             if strategy == "disease_area"
-            else fn(triples, seed=seed, **kwargs)
+            else fn(triples, seed=seed, disease_partition=partition, **kwargs)
         )
         save_split(result, relation, out_dir)
         out[relation] = result
