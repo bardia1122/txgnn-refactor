@@ -93,17 +93,32 @@ def check_splits(out_dir: Path, relations: Sequence[str]) -> None:
 
         def _entity_safety(relation=relation) -> str:
             result = load_split(relation, out_dir)
+            zero_shot = result.strategy in ("disease_holdout", "disease_area")
             train_heads = set(result.train.head_idx)
             train_tails = set(result.train.tail_idx)
+
             for name in ("valid", "test"):
                 part = getattr(result, name)
                 unseen_h = set(part.head_idx) - train_heads
-                unseen_t = set(part.tail_idx) - train_tails
                 assert not unseen_h, f"{name}: {len(unseen_h)} drugs never seen in train"
-                assert not unseen_t, f"{name}: {len(unseen_t)} diseases never seen in train"
+
+                unseen_t = set(part.tail_idx) - train_tails
+                if not zero_shot:
+                    assert not unseen_t, (
+                        f"{name}: {len(unseen_t)} diseases never seen in train"
+                    )
+                elif len(part):
+                    # the defining property of a zero-shot split: held-out
+                    # diseases must NOT be reachable through a train triple
+                    leaked = set(part.tail_idx) & train_tails
+                    assert not leaked, (
+                        f"{name}: {len(leaked)} held-out diseases also appear in "
+                        f"train - the split is not zero-shot"
+                    )
+            kind = "zero-shot" if zero_shot else "entity-safe"
             return (
-                f"train={len(result.train):,} valid={len(result.valid):,} "
-                f"test={len(result.test):,}"
+                f"{result.strategy} ({kind}): train={len(result.train):,} "
+                f"valid={len(result.valid):,} test={len(result.test):,}"
             )
 
         def _partition(relation=relation) -> str:
@@ -124,22 +139,20 @@ def check_splits(out_dir: Path, relations: Sequence[str]) -> None:
             extra = union - original
             assert not extra, f"{len(extra)} triples in the split that are not in the source"
 
+            # every triple must be accounted for: either it is in a split, or it
+            # was dropped for a reason the split itself reported
             safety = result.stats.get("entity_safety", {})
-            policy = safety.get("policy", "reassign")
-            if policy == "reassign":
-                assert not missing, (
-                    f"{len(missing)} source triples missing from the split "
-                    "(on_violation='reassign' must not lose any triple)"
-                )
-                return f"{len(union):,} triples partitioned, no overlap, nothing lost"
-
-            expected_dropped = sum(
+            expected_missing = sum(
                 safety.get(name, {}).get("num_dropped", 0) for name in ("valid", "test")
+            ) + result.stats.get("num_held_out_dropped_out_of_area", 0)
+
+            assert len(missing) == expected_missing, (
+                f"{len(missing)} source triples missing from the split but "
+                f"{expected_missing} were reported as dropped "
+                f"(entity safety + out-of-area held-out triples)"
             )
-            assert len(missing) == expected_dropped, (
-                f"{len(missing)} triples missing but {expected_dropped} were reported "
-                "as dropped by the entity-safety constraint"
-            )
+            if not missing:
+                return f"{len(union):,} triples partitioned, no overlap, nothing lost"
             return (
                 f"{len(union):,} triples partitioned, no overlap, "
                 f"{len(missing):,} dropped as reported"

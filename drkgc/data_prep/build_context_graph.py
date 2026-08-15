@@ -72,8 +72,28 @@ EDGE_COLUMNS = [
 def build_context_edges(
     df: pd.DataFrame,
     aux_relations: Sequence[str] = AUX_RELATIONS,
+    split_filter: str | None = "train",
 ) -> pd.DataFrame:
-    """Edge list of the auxiliary relations, in their stored orientation."""
+    """Edge list of the auxiliary relations, in their stored orientation.
+
+    `split_filter` matters for disease-area KGs: those carry a `split` column
+    marking the edges TxGNN removes from training (all drug-disease edges into
+    the held-out area *plus* a sample of its 2-hop neighbourhood, which includes
+    gene/protein edges). Keeping only `split == 'train'` is what makes the
+    setting genuinely zero-shot — otherwise the held-out diseases keep their
+    gene associations and the context graph leaks them straight back in.
+    Ignored when the KG has no `split` column (the full KG).
+    """
+    if split_filter and "split" in df.columns:
+        before = len(df)
+        df = df[df.split == split_filter]
+        print(
+            f"  split filter {split_filter!r}: kept {len(df):,} of {before:,} KG rows "
+            f"({before - len(df):,} held-out rows excluded from the context graph)"
+        )
+    elif split_filter and "split" not in df.columns:
+        print("  (KG has no 'split' column - nothing to filter, using every edge)")
+
     frames: List[pd.DataFrame] = []
     for relation in aux_relations:
         sub = df[df.relation == relation]
@@ -243,22 +263,26 @@ def build(
     aux_relations: Sequence[str] = AUX_RELATIONS,
     df: pd.DataFrame | None = None,
     write_pyg: bool = True,
+    area: str | None = None,
+    split_filter: str | None = "train",
 ) -> Dict:
     data_folder, out_dir = Path(data_folder), Path(out_dir)
     ctx_dir = out_dir / CONTEXT_DIR
     ctx_dir.mkdir(parents=True, exist_ok=True)
 
     if df is None:
-        df = load_kg_directed(data_folder)
+        df = load_kg_directed(data_folder, area=area)
 
     print("Building auxiliary/context graph ...")
-    edges = build_context_edges(df, aux_relations)
+    edges = build_context_edges(df, aux_relations, split_filter)
     edges_path = ctx_dir / "context_edges.csv"
     edges.to_csv(edges_path, index=False)
     print(f"  {len(edges):,} edges -> {edges_path}")
 
     node_sizes = node_type_sizes(df)
     meta = {
+        "area": area,
+        "split_filter": split_filter if "split" in df.columns else None,
         "aux_relations": list(aux_relations),
         "edge_types": [list(et) for et in context_edge_types(edges)],
         "num_edges": int(len(edges)),
@@ -324,6 +348,10 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--data-folder", default=str(DEFAULT_KG_FOLDER))
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--aux-relations", nargs="+", default=list(AUX_RELATIONS))
+    parser.add_argument("--area", default=None,
+                        help="build from this disease area's KG instead of the full KG")
+    parser.add_argument("--split-filter", default="train",
+                        help="KG split to keep for area KGs ('none' to keep everything)")
     parser.add_argument(
         "--no-pyg",
         action="store_true",
@@ -336,6 +364,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         Path(args.out_dir),
         args.aux_relations,
         write_pyg=not args.no_pyg,
+        area=args.area,
+        split_filter=None if args.split_filter == "none" else args.split_filter,
     )
 
 

@@ -1,8 +1,8 @@
 """The split contract shared by every DrKGC splitting strategy.
 
-Step 1 only ships `split_random.get_random_split`. A later task will add a
-`split_disease_area.get_disease_area_split` next to it (TxGNN's zero-shot
-disease-area split, see NOTES.md for where that logic already lives). Both must
+Implementations: `split_random.get_random_split` (`'random'`) and, in
+`split_disease_area.py`, `get_disease_holdout_split` (`'disease_holdout'`) and
+`get_disease_area_split` (`'disease_area'`). Every strategy must
 
 * take a triple table as produced by `extract_triples` (plus a seed and
   strategy-specific kwargs), and
@@ -221,7 +221,7 @@ def register_split(name: str) -> Callable[[Callable[..., SplitResult]], Callable
 
 def get_split_fn(name: str) -> Callable[..., SplitResult]:
     # importing here keeps `split_base` free of concrete-strategy imports
-    from drkgc.data_prep import split_random  # noqa: F401
+    from drkgc.data_prep import split_disease_area, split_random  # noqa: F401
 
     if name not in SPLIT_REGISTRY:
         raise KeyError(
@@ -231,6 +231,6 @@ def get_split_fn(name: str) -> Callable[..., SplitResult]:
 
 
 def available_splits() -> Iterable[str]:
-    from drkgc.data_prep import split_random  # noqa: F401
+    from drkgc.data_prep import split_disease_area, split_random  # noqa: F401
 
     return sorted(SPLIT_REGISTRY)
