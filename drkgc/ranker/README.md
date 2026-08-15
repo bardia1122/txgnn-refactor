@@ -157,6 +157,40 @@ the R-GCN a path into held-out diseases during message passing. It needs a
 retrain, and it does not leak — `disease_disease` is not a target relation, and
 the leakage check still runs.
 
+## Experiment log — zero-shot (disease_holdout, indication/valid)
+
+recall@20 with k=20, filtered protocol. "conversion" is recall divided by the
+prototype coverage ceiling for that split, i.e. how much of what is *reachable*
+the model actually retrieves.
+
+| configuration | recall@20 | MRR | ceiling | conversion |
+|---|---|---|---|---|
+| R-GCN, no prototype | 0.229 | 0.131 | – | – |
+| \+ prototype, post-hoc (`--proto rarity`) | 0.418 | 0.277 | 0.589 | 71% |
+| \+ `disease_disease` in context graph, trained with prototype | **0.484** | **0.308** | 0.794 | 61% |
+| \+ `disease` degree cap at p95 | 0.400 | 0.252 | 0.788 | 51% |
+
+Two findings worth keeping:
+
+* **Prototypes are the single biggest lever** in the zero-shot setting: +83%
+  recall applied post-hoc to a model that never trained with them. Adding
+  `disease_disease` then lifted coverage (58.9% → 79.4% of queries) and recall
+  again, though conversion efficiency fell — the newly-reachable diseases are
+  the harder ones, reachable only through ontology links rather than shared
+  molecular targets.
+* **Do not degree-cap diseases.** Capping `disease_disease` at p95 (max degree
+  1,524 → 23) cost only ~0.6 points of coverage but dropped recall on every
+  split and lowered conversion from 61% to 51%. Hub semantics are
+  relation-specific: a gene with 5,198 PPI edges is a promiscuous binder
+  carrying little signal, whereas a disease with 1,524 `disease_disease` edges
+  is a general ontology category — precisely the bridge that connects a rare
+  held-out disease to well-studied ones. `--node-types` caps gene/protein only
+  by default for this reason.
+
+The same logic casts some doubt on the gene/protein cap itself in the zero-shot
+setting; `--uncapped` on `train.py` and `rank.py` tests that without touching
+step 1.
+
 ## What to expect
 
 On the **random split**, this is the setting the paper's R-GCN number comes from
