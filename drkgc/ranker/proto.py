@@ -245,8 +245,27 @@ def build_prototype_context(
     no_profile = topk_coef.sum(axis=1) <= 0
     alpha[no_profile] = 0.0
 
+    # coverage over the diseases actually queried at evaluation time - this is
+    # what bounds recall, not coverage over all 17k diseases
+    eval_coverage: Dict[str, Dict[str, float]] = {}
+    for (relation, split), triples in sorted(data.eval_triples.items()):
+        if len(triples) == 0:
+            continue
+        rows = np.array(
+            [gid2row[int(t)] for t in triples[:, 2] if int(t) in gid2row], dtype=np.int64
+        )
+        if len(rows) == 0:
+            continue
+        unique_rows = np.unique(rows)
+        eval_coverage[f"{relation}/{split}"] = {
+            "num_query_diseases": int(len(unique_rows)),
+            "with_profile": int((~no_profile[unique_rows]).sum()),
+            "frac_queries_with_profile": round(float((~no_profile[rows]).mean()), 4),
+        }
+
     zero_degree = degree == 0
     stats = {
+        "eval_coverage": eval_coverage,
         "profile_relations": used_relations,
         "profile_dims": int(profile.shape[1]),
         "num_diseases": int(len(disease_gids)),
@@ -291,6 +310,14 @@ def describe(ctx: PrototypeContext) -> str:
             f"({s['num_zero_degree_without_profile']:,} of them are zero-degree, "
             "so they remain unreachable)"
         )
+    if s.get("eval_coverage"):
+        lines.append("  coverage of the diseases actually queried (bounds recall):")
+        for key, cov in s["eval_coverage"].items():
+            lines.append(
+                f"    {key:<28} {cov['frac_queries_with_profile']:.1%} of queries "
+                f"({cov['with_profile']:,}/{cov['num_query_diseases']:,} diseases "
+                "have a profile)"
+            )
     return "\n".join(lines)
 
 
