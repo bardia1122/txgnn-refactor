@@ -166,7 +166,7 @@ def _load_split_frames(
 def build_dataset(
     out_dir: Path = DEFAULT_OUT_DIR,
     target_relations: Sequence[str] = TARGET_RELATIONS,
-    aux_relations: Sequence[str] = AUX_RELATIONS,
+    aux_relations: Optional[Sequence[str]] = None,
     capped: bool = True,
     train_on_aux: bool = True,
 ) -> RankerData:
@@ -174,6 +174,13 @@ def build_dataset(
 
     Parameters
     ----------
+    aux_relations
+        Restrict the context graph to these relations. **Defaults to every
+        relation present in the edge list** — the context graph on disk is the
+        source of truth, so rebuilding step 1 with an extra relation
+        automatically feeds it to the model. (Filtering against a hardcoded
+        constant here silently dropped `disease_disease` from the graph while
+        the prototype, which reads the CSV directly, still used it.)
     capped
         Use the degree-capped context graph (the default going forward).
     train_on_aux
@@ -190,7 +197,14 @@ def build_dataset(
         dtype={"head_id": str, "tail_id": str},
         keep_default_na=False,
     )
-    ctx = ctx[ctx.relation.isin(aux_relations)]
+    if aux_relations is not None:
+        missing = set(aux_relations) - set(ctx.relation.unique())
+        if missing:
+            raise KeyError(
+                f"relations {sorted(missing)} are not in {ctx_name}; rebuild step 1 "
+                "with --aux-relations if you want them in the graph"
+            )
+        ctx = ctx[ctx.relation.isin(aux_relations)]
 
     frames = _load_split_frames(out_dir, target_relations)
 
