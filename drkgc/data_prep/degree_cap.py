@@ -23,7 +23,7 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -227,13 +227,21 @@ def _isolation_report(edges: pd.DataFrame, capped: pd.DataFrame) -> Dict:
 def run(
     out_dir: Path = DEFAULT_OUT_DIR,
     data_folder: Path = DEFAULT_KG_FOLDER,
-    node_type: str = HUB_NODE_TYPE,
+    node_types: Sequence[str] = (HUB_NODE_TYPE,),
     cap: Optional[int] = None,
     percentile: float = DEGREE_CAP_PERCENTILE,
     seed: int = SEED,
     df: pd.DataFrame | None = None,
     write_pyg: bool = True,
+    area: str | None = None,
 ) -> Dict:
+    """Cap each node type in `node_types`, in order, in a single pass.
+
+    Capping is always applied to the *uncapped* edge list and the passes are
+    chained, so capping a second node type never discards the first one's cap.
+    Each pass sees the graph left by the previous one, which is what you want:
+    removing hub edges can only lower the next type's degrees.
+    """
     out_dir = Path(out_dir)
     ctx_dir = out_dir / CONTEXT_DIR
     edges_path = ctx_dir / "context_edges.csv"
@@ -244,51 +252,60 @@ def run(
     edges = pd.read_csv(edges_path, dtype={"head_id": str, "tail_id": str},
                         keep_default_na=False)
 
-    degrees = compute_degrees(edges, node_type)
-    stats_before = degree_stats(degrees)
-    print(f"{node_type} degree distribution (uncapped auxiliary graph):")
-    for key in ("num_nodes_with_edges", "min", "median", "mean", "p90", "p95", "p99", "max"):
-        if key in stats_before:
-            print(f"  {key:<22} {stats_before[key]:,.2f}" if isinstance(stats_before[key], float)
-                  else f"  {key:<22} {stats_before[key]:,}")
+    capped = edges
+    passes = []
+    for node_type in node_types:
+        degrees = compute_degrees(capped, node_type)
+        stats_before = degree_stats(degrees)
+        print(f"\n{node_type} degree distribution:")
+        for key in ("num_nodes_with_edges", "min", "median", "mean",
+                    "p90", "p95", "p99", "max"):
+            if key in stats_before:
+                value = stats_before[key]
+                print(f"  {key:<22} {value:,.2f}" if isinstance(value, float)
+                      else f"  {key:<22} {value:,}")
 
-    degrees_name = f"{node_type.replace('/', '_')}_degrees.csv"
-    degrees.reset_index().to_csv(ctx_dir / degrees_name, index=False)
+        degrees_name = f"{node_type.replace('/', '_')}_degrees.csv"
+        degrees.reset_index().to_csv(ctx_dir / degrees_name, index=False)
 
-    capped, info = cap_degrees(edges, node_type, cap, percentile, seed)
-    print(
-        f"\ncap = {info['cap']} (p{percentile:g} of the uncapped distribution)"
-        if cap is None
-        else f"\ncap = {info['cap']} (explicit)"
-    )
-    print(
-        f"  {info['num_nodes_over_cap']:,} nodes were over the cap; "
-        f"removed {info['num_edges_removed']:,} of {info['num_edges_before']:,} edges "
-        f"({info['num_edges_removed'] / max(info['num_edges_before'], 1):.1%})"
-    )
-    print(f"  max degree {info['degree_stats_before']['max']:,} -> "
-          f"{info['degree_stats_after']['max']:,}")
+        capped, info = cap_degrees(capped, node_type, cap, percentile, seed)
+        source = "explicit" if cap is not None else f"p{percentile:g}"
+        print(f"  cap = {info['cap']} ({source})")
+        print(
+            f"  {info['num_nodes_over_cap']:,} nodes over the cap; removed "
+            f"{info['num_edges_removed']:,} of {info['num_edges_before']:,} edges "
+            f"({info['num_edges_removed'] / max(info['num_edges_before'], 1):.1%})"
+        )
+        print(f"  max degree {info['degree_stats_before']['max']:,} -> "
+              f"{info['degree_stats_after']['max']:,}")
+        passes.append(info)
 
     capped_path = ctx_dir / "context_edges_capped.csv"
     capped.to_csv(capped_path, index=False)
-    print(f"  capped edge list -> {capped_path}")
+    print(f"\ncapped edge list ({len(capped):,} edges) -> {capped_path}")
 
     if write_pyg:
         if df is None:
-            df = load_kg_directed(Path(data_folder))
+            df = load_kg_directed(Path(data_folder), area=area)
         data = to_hetero_data(capped, node_type_sizes(df))
         save_context_graph(data, ctx_dir / "context_graph_capped.pt")
-        print(f"  capped PyG HeteroData -> {ctx_dir / 'context_graph_capped.pt'}")
+        print(f"capped PyG HeteroData -> {ctx_dir / 'context_graph_capped.pt'}")
 
-    (ctx_dir / "degree_stats.json").write_text(json.dumps(info, indent=2))
-    return info
+    # the first pass stays at the top level for backwards compatibility;
+    # `passes` carries every node type that was capped
+    report = {**passes[0], "node_types": list(node_types), "passes": passes,
+              "num_edges_final": int(len(capped))}
+    (ctx_dir / "degree_stats.json").write_text(json.dumps(report, indent=2))
+    return report
 
 
 def main(argv: Iterable[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--data-folder", default=str(DEFAULT_KG_FOLDER))
-    parser.add_argument("--node-type", default=HUB_NODE_TYPE)
+    parser.add_argument("--node-types", nargs="+", default=[HUB_NODE_TYPE],
+                        help="node types to cap, in order (e.g. gene/protein disease)")
+    parser.add_argument("--area", default=None)
     parser.add_argument("--cap", type=int, default=None,
                         help="explicit degree cap; overrides --percentile")
     parser.add_argument("--percentile", type=float, default=DEGREE_CAP_PERCENTILE)
@@ -299,11 +316,12 @@ def main(argv: Iterable[str] | None = None) -> None:
     run(
         Path(args.out_dir),
         Path(args.data_folder),
-        args.node_type,
+        args.node_types,
         args.cap,
         args.percentile,
         args.seed,
         write_pyg=not args.no_pyg,
+        area=args.area,
     )
 
 

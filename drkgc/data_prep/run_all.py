@@ -20,7 +20,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -77,7 +77,7 @@ def run(
     fracs=SPLIT_FRACS,
     seed: int = SEED,
     on_violation: str = "reassign",
-    node_type: str = HUB_NODE_TYPE,
+    node_types: Sequence[str] = (HUB_NODE_TYPE,),
     cap: int | None = None,
     percentile: float = DEGREE_CAP_PERCENTILE,
     write_pyg: bool = True,
@@ -99,7 +99,7 @@ def run(
             "fracs": list(fracs),
             "seed": seed,
             "on_violation": on_violation,
-            "degree_cap_node_type": node_type,
+            "degree_cap_node_types": list(node_types),
             "degree_cap": cap,
             "degree_cap_percentile": percentile,
         },
@@ -170,12 +170,13 @@ def run(
     report["degree_cap"] = degree_cap.run(
         out_dir,
         data_folder,
-        node_type=node_type,
+        node_types=node_types,
         cap=cap,
         percentile=percentile,
         seed=seed,
         df=df,
         write_pyg=write_pyg,
+        area=area,
     )
 
     report_path = out_dir / "step1_report.json"
@@ -199,11 +200,14 @@ def _summary(report: dict) -> None:
         f"({leak['num_overlapping_pairs']} overlapping pairs)"
     )
     dc = report["degree_cap"]
-    print(
-        f"degree cap         {dc['cap']} ({dc['cap_source']}); max degree "
-        f"{dc['degree_stats_before']['max']:,} -> {dc['degree_stats_after']['max']:,}; "
-        f"{dc['num_edges_removed']:,} edges removed"
-    )
+    for entry in dc.get("passes", [dc]):
+        print(
+            f"degree cap         {entry['node_type']}: {entry['cap']} "
+            f"({entry['cap_source']}); max degree "
+            f"{entry['degree_stats_before']['max']:,} -> "
+            f"{entry['degree_stats_after']['max']:,}; "
+            f"{entry['num_edges_removed']:,} edges removed"
+        )
     print("\nNext: python -m drkgc.data_prep.test_sanity")
 
 
@@ -224,7 +228,8 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--fracs", nargs=3, type=float, default=list(SPLIT_FRACS))
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--on-violation", choices=["reassign", "drop"], default="reassign")
-    parser.add_argument("--node-type", default=HUB_NODE_TYPE)
+    parser.add_argument("--node-types", nargs="+", default=[HUB_NODE_TYPE],
+                        help="node types to degree-cap, in order")
     parser.add_argument("--cap", type=int, default=None)
     parser.add_argument("--percentile", type=float, default=DEGREE_CAP_PERCENTILE)
     parser.add_argument("--no-pyg", action="store_true",
@@ -245,7 +250,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         tuple(args.fracs),
         args.seed,
         args.on_violation,
-        args.node_type,
+        args.node_types,
         args.cap,
         args.percentile,
         write_pyg=not args.no_pyg,

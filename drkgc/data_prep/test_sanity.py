@@ -224,23 +224,30 @@ def check_degree_cap(out_dir: Path, node_type: str = HUB_NODE_TYPE) -> None:
     def _reduced() -> str:
         edges = read("context_edges.csv")
         capped = read("context_edges_capped.csv")
-        cap = int(info["cap"])
-        deg_before = compute_degrees(edges, node_type)
-        deg_after = compute_degrees(capped, node_type)
-        assert deg_after.max() <= cap, (
-            f"max degree after capping is {deg_after.max()}, above the cap {cap}"
-        )
-        if deg_before.max() > cap:
-            assert deg_after.max() < deg_before.max(), (
-                "capping did not reduce the maximum degree"
+        summary = []
+        # one pass per capped node type; every one must hold in the final graph
+        for entry in info.get("passes", [info]):
+            ntype = entry.get("node_type", node_type)
+            cap = int(entry["cap"])
+            deg_before = compute_degrees(edges, ntype)
+            deg_after = compute_degrees(capped, ntype)
+            assert deg_after.max() <= cap, (
+                f"{ntype}: max degree after capping is {deg_after.max()}, "
+                f"above the cap {cap}"
             )
-            assert len(capped) < len(edges), "capping removed no edges"
-        assert (deg_after <= deg_before.reindex(deg_after.index)).all(), (
-            "some node gained degree during capping"
-        )
+            if deg_before.max() > cap:
+                assert deg_after.max() < deg_before.max(), (
+                    f"{ntype}: capping did not reduce the maximum degree"
+                )
+                assert len(capped) < len(edges), "capping removed no edges"
+            assert (deg_after <= deg_before.reindex(deg_after.index)).all(), (
+                f"{ntype}: some node gained degree during capping"
+            )
+            summary.append(
+                f"{ntype} cap={cap} ({int(deg_before.max()):,}->{int(deg_after.max()):,})"
+            )
         return (
-            f"cap={cap}; max degree {int(deg_before.max()):,} -> "
-            f"{int(deg_after.max()):,}; {len(edges) - len(capped):,} edges removed"
+            "; ".join(summary) + f"; {len(edges) - len(capped):,} edges removed total"
         )
 
     def _subset() -> str:
@@ -256,12 +263,14 @@ def check_degree_cap(out_dir: Path, node_type: str = HUB_NODE_TYPE) -> None:
     def _deterministic() -> str:
         edges = read("context_edges.csv")
         capped = read("context_edges_capped.csv")
-        again, _ = cap_degrees(
-            edges,
-            node_type=node_type,
-            cap=int(info["cap"]),
-            seed=int(info["seed"]),
-        )
+        again = edges
+        for entry in info.get("passes", [info]):  # replay every pass, in order
+            again, _ = cap_degrees(
+                again,
+                node_type=entry.get("node_type", node_type),
+                cap=int(entry["cap"]),
+                seed=int(entry["seed"]),
+            )
         assert len(again) == len(capped), (
             f"rerun produced {len(again):,} edges, artifact has {len(capped):,}"
         )
