@@ -71,6 +71,10 @@ class RetrievalGraph:
 
     #: symmetric boolean adjacency for shortest-path search
     adjacency: object
+    #: the same with hub nodes removed; falls back to `adjacency` when unused
+    path_adjacency: object = None
+    #: nodes excluded from path finding because their degree exceeds the limit
+    hub_nodes: Set[int] = field(default_factory=set)
     #: (u, v) -> relation name, in the direction the KG stores it
     edge_relation: Dict[Tuple[int, int], str]
     #: (relation, inverted) -> csr adjacency, for rule grounding
@@ -88,9 +92,20 @@ class RetrievalGraph:
         return None
 
 
-def build_retrieval_graph(data: RankerData) -> RetrievalGraph:
+def build_retrieval_graph(
+    data: RankerData, max_hub_degree: int = 0
+) -> RetrievalGraph:
     """Assemble the training graph. Uses the forward half of `data.edge_index`
-    (the second half is the generated inverses) so each edge appears once."""
+    (the second half is the generated inverses) so each edge appears once.
+
+    `max_hub_degree > 0` removes very high-degree nodes from the **path-finding**
+    graph only. A category node like `Mendelian disease` (degree 1,524) creates a
+    2-hop path between almost any pair of genetic conditions, and "both are
+    Mendelian diseases" is not evidence. The R-GCN keeps those edges — for
+    embedding propagation a category hub is a useful bridge, and capping it
+    measurably hurt the ranker (see drkgc/ranker/README.md). The value of a hub
+    depends on what you use it for, so the two graphs differ deliberately.
+    """
     from scipy import sparse
 
     n = data.entities.num_entities
@@ -123,7 +138,25 @@ def build_retrieval_graph(data: RankerData) -> RetrievalGraph:
     undirected = undirected + undirected.T
     undirected.data[:] = 1
 
-    return RetrievalGraph(undirected, edge_relation, matrices, n)
+    path_adjacency, hub_nodes = undirected, set()
+    if max_hub_degree > 0:
+        degree = np.asarray(undirected.sum(axis=1)).ravel()
+        hubs = np.where(degree > max_hub_degree)[0]
+        if len(hubs):
+            keep = np.ones(n, dtype=np.int8)
+            keep[hubs] = 0
+            mask = sparse.diags(keep)
+            path_adjacency = (mask @ undirected @ mask).tocsr()
+            path_adjacency.eliminate_zeros()
+            hub_nodes = set(hubs.tolist())
+        print(
+            f"  excluded {len(hub_nodes):,} hub nodes (degree > {max_hub_degree}) "
+            "from path finding"
+        )
+
+    return RetrievalGraph(
+        undirected, edge_relation, matrices, n, path_adjacency, hub_nodes
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +176,16 @@ def shortest_path_triples(
     """
     from scipy.sparse.csgraph import dijkstra
 
+    adjacency = graph.path_adjacency if graph.path_adjacency is not None else graph.adjacency
     distances, predecessors = dijkstra(
-        graph.adjacency, indices=query, unweighted=True, return_predecessors=True
+        adjacency, indices=query, unweighted=True, return_predecessors=True
     )
+    if graph.hub_nodes and not np.isfinite(distances[list(candidates)]).any():
+        # the query itself was a hub, or hub removal disconnected it entirely -
+        # fall back to the full graph rather than return an empty subgraph
+        distances, predecessors = dijkstra(
+            graph.adjacency, indices=query, unweighted=True, return_predecessors=True
+        )
 
     triples: List[Triple] = []
     lengths: Dict[int, int] = {}
@@ -295,8 +335,21 @@ def retrieve_subgraph(
                 rule_groundings(graph, rule, candidate, query, max_groundings), tau
             )
 
+    relation_counts: Dict[str, int] = defaultdict(int)
+    for _, relation, _ in collected:
+        relation_counts[relation] += 1
+    mechanism_triples = sum(
+        count for relation, count in relation_counts.items()
+        if relation in MECHANISM_RELATIONS
+    )
+
     reachable = [d for d in path_lengths.values() if d >= 0]
     stats = {
+        "relation_counts": dict(relation_counts),
+        "num_mechanism_triples": mechanism_triples,
+        "frac_mechanism": (
+            round(mechanism_triples / len(collected), 3) if collected else 0.0
+        ),
         "num_triples": len(collected),
         "num_from_shortest_paths": num_paths,
         "num_from_reserved_mechanism": num_mechanism,
@@ -334,10 +387,11 @@ def run(
     max_groundings: int = MAX_GROUNDINGS,
     capped: bool = True,
     limit: Optional[int] = None,
+    max_hub_degree: int = 0,
 ) -> Dict:
     out_dir = Path(out_dir)
     data = build_dataset(out_dir, capped=capped)
-    graph = build_retrieval_graph(data)
+    graph = build_retrieval_graph(data, max_hub_degree)
     print(
         f"retrieval graph: {graph.num_entities:,} entities, "
         f"{len(graph.edge_relation):,} directed training edges"
@@ -364,6 +418,7 @@ def run(
             slug = relation.replace(" ", "_").replace("/", "_")
             path = subgraph_dir / f"{slug}_{split}_subgraphs.jsonl"
             aggregate = defaultdict(list)
+            composition: Dict[str, int] = defaultdict(int)
 
             with path.open("w", encoding="utf-8") as handle:
                 for row in frame.itertuples(index=False):
@@ -397,12 +452,21 @@ def run(
                     for key, value in subgraph.stats.items():
                         if isinstance(value, (int, float)) and value is not None:
                             aggregate[key].append(value)
+                    for relation, count in subgraph.stats["relation_counts"].items():
+                        composition[relation] += count
 
             means = {k: round(float(np.mean(v)), 3) for k, v in aggregate.items()}
+            total_triples = sum(composition.values()) or 1
             summary[f"{relation}/{split}"] = {
                 "num_queries": int(len(frame)),
                 "path": str(path),
                 "mean": means,
+                "relation_composition": {
+                    rel: {"count": count, "frac": round(count / total_triples, 3)}
+                    for rel, count in sorted(
+                        composition.items(), key=lambda kv: -kv[1]
+                    )
+                },
             }
             print(
                 f"  {split}: {len(frame):,} subgraphs | "
@@ -413,8 +477,15 @@ def run(
                 f"{means.get('num_candidates', 0):.0f} candidates reachable "
                 f"-> {path.name}"
             )
+            shares = ", ".join(
+                f"{rel} {count / total_triples:.0%}"
+                for rel, count in sorted(composition.items(), key=lambda kv: -kv[1])
+            )
+            print(f"    composition: {shares}")
 
     report = {
+        "max_hub_degree": max_hub_degree,
+        "num_hub_nodes_excluded": len(graph.hub_nodes),
         "tau": tau,
         "reserve_mechanism": reserve_mechanism,
         "max_groundings": max_groundings,
@@ -436,6 +507,9 @@ def main(argv: Iterable[str] | None = None) -> None:
                              "(0.0 = paper-faithful confidence ordering)")
     parser.add_argument("--max-groundings", type=int, default=MAX_GROUNDINGS)
     parser.add_argument("--uncapped", action="store_true")
+    parser.add_argument("--max-hub-degree", type=int, default=0,
+                        help="exclude nodes above this degree from path finding "
+                             "(0 = off). Category hubs make vacuous 2-hop paths.")
     parser.add_argument("--limit", type=int, default=None,
                         help="only process the first N queries (for a quick look)")
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -449,6 +523,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.max_groundings,
         capped=not args.uncapped,
         limit=args.limit,
+        max_hub_degree=args.max_hub_degree,
     )
 
 
