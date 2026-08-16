@@ -100,27 +100,66 @@ def smoke_test(
         )
     isolated = (degree[batch["candidate_index"].reshape(-1)] == 0).sum().item()
 
-    # gradients must reach the GCN, or joint training in step 5 is a no-op
-    output["query"].sum().backward()
-    gcn_grad = adapter.gcn.input_projection.weight.grad
-    assert gcn_grad is not None and torch.isfinite(gcn_grad).all(), (
-        "no gradient reached the subgraph GCN"
-    )
+    # Gradients must reach the GCN, or joint training in step 5 is a silent no-op.
+    #
+    # The probe loss must NOT be a plain .sum(): the adapter ends in a LayerNorm,
+    # whose rows sum to zero by construction, so `output.sum()` is a constant and
+    # back-propagates exactly zero. A random-weighted sum has no such degeneracy.
+    torch.manual_seed(0)
+    loss = (output["query"] * torch.randn_like(output["query"])).sum() + (
+        output["candidates"] * torch.randn_like(output["candidates"])
+    ).sum()
+    loss.backward()
+
+    def module_grad_norm(module, label: str) -> float:
+        """Total gradient norm over a module's parameters.
+
+        Probing by module rather than by a named attribute keeps this working
+        across PyG versions, where RGCNConv's parameters differ depending on
+        whether basis decomposition is used.
+        """
+        total, seen = 0.0, 0
+        for parameter in module.parameters():
+            if parameter.grad is None:
+                continue
+            assert torch.isfinite(parameter.grad).all(), f"non-finite gradient in {label}"
+            total += float(parameter.grad.norm().item()) ** 2
+            seen += 1
+        assert seen, f"no parameter of {label} received a gradient"
+        return total ** 0.5
+
+    probes = {
+        "gcn.input_projection": module_grad_norm(
+            adapter.gcn.input_projection, "gcn.input_projection"
+        ),
+        "gcn.conv0": module_grad_norm(adapter.gcn.convs[0], "gcn.conv0"),
+        "adapter.projection": module_grad_norm(
+            adapter.adapter.projection, "adapter.projection"
+        ),
+    }
+    for name, norm in probes.items():
+        assert norm > 0.0, (
+            f"zero gradient at {name} - it would not learn during step 5"
+        )
 
     print(
         f"\nquery vectors      {tuple(output['query'].shape)}\n"
         f"candidate vectors  {tuple(output['candidates'].shape)}\n"
         f"local embeddings   {tuple(output['local'].shape)}\n"
         f"isolated candidates in this batch: {isolated} "
-        f"(each still gets a vector from its global embedding)\n"
-        f"gradient norm into the GCN: {gcn_grad.norm().item():.4f}"
+        f"(each still gets a vector from its global embedding)"
     )
+    print("gradient norms (random-weighted probe loss):")
+    for name, norm in probes.items():
+        print(f"  {name:<24} {norm:.4f}")
+
     return {
         "num_samples": len(samples),
         "global_dim": global_dim,
         "llm_dim": llm_dim,
         "adapter_parameters": adapter.num_parameters,
         "isolated_candidates_in_batch": int(isolated),
+        "grad_norms": {k: round(v, 6) for k, v in probes.items()},
     }
 
 
