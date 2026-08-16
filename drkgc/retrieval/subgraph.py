@@ -71,15 +71,15 @@ class RetrievalGraph:
 
     #: symmetric boolean adjacency for shortest-path search
     adjacency: object
-    #: the same with hub nodes removed; falls back to `adjacency` when unused
-    path_adjacency: object = None
-    #: nodes excluded from path finding because their degree exceeds the limit
-    hub_nodes: Set[int] = field(default_factory=set)
     #: (u, v) -> relation name, in the direction the KG stores it
     edge_relation: Dict[Tuple[int, int], str]
     #: (relation, inverted) -> csr adjacency, for rule grounding
     matrices: Dict[Tuple[str, bool], object]
     num_entities: int
+    #: `adjacency` with hub nodes removed; falls back to `adjacency` when unused
+    path_adjacency: object = None
+    #: nodes excluded from path finding because their degree exceeds the limit
+    hub_nodes: Set[int] = field(default_factory=set)
 
     def canonical(self, u: int, v: int) -> Optional[Triple]:
         """Return the stored triple for an edge traversed u -> v, either way."""
