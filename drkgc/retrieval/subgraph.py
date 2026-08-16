@@ -145,7 +145,7 @@ def build_retrieval_graph(
         if len(hubs):
             keep = np.ones(n, dtype=np.int8)
             keep[hubs] = 0
-            mask = sparse.diags(keep)
+            mask = sparse.diags(keep, dtype=keep.dtype)
             path_adjacency = (mask @ undirected @ mask).tocsr()
             path_adjacency.eliminate_zeros()
             hub_nodes = set(hubs.tolist())
@@ -452,8 +452,10 @@ def run(
                     for key, value in subgraph.stats.items():
                         if isinstance(value, (int, float)) and value is not None:
                             aggregate[key].append(value)
-                    for relation, count in subgraph.stats["relation_counts"].items():
-                        composition[relation] += count
+                    # NB: do not name this `relation` - it would rebind the
+                    # outer loop variable and corrupt every later iteration
+                    for triple_relation, count in subgraph.stats["relation_counts"].items():
+                        composition[triple_relation] += count
 
             means = {k: round(float(np.mean(v)), 3) for k, v in aggregate.items()}
             total_triples = sum(composition.values()) or 1
