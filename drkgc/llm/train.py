@@ -118,7 +118,7 @@ def train(
     eval_split: str = "valid",
     evidence: str = "embedding",
     hidden_dim: int = 128,
-    epochs: int = 3,
+    epochs: int = 5,
     batch_size: int = 1,
     grad_accum: int = 8,
     lr: float = 2e-4,
@@ -129,6 +129,7 @@ def train(
     skip_unanswerable: bool = True,
     eval_every: int = 1,
     eval_limit: int = 200,
+    dev_frac: float = 0.15,
     quantise: bool = True,
     seed: int = SEED,
 ) -> Dict:
@@ -136,7 +137,9 @@ def train(
 
     from drkgc.adapter.data import load_global_embeddings
     from drkgc.llm.batching import make_batch, truncation_report
-    from drkgc.llm.dataset import describe, load_examples, name_lookup
+    from drkgc.llm.dataset import (
+        dedup_by_query, describe, load_examples, name_lookup, split_by_query,
+    )
     from drkgc.llm.evaluate import predict, summarise
     from drkgc.ranker.data import build_dataset
 
@@ -152,26 +155,42 @@ def train(
     global_dim = int(global_embeddings.shape[1])
 
     # ---- data -------------------------------------------------------------
-    train_examples: List = []
-    for relation in relations:
-        subset = load_examples(
-            out_dir, relation, train_split, data.rel2id, names, limit=limit,
-            skip_unanswerable=skip_unanswerable, dedup=dedup,
-        )
-        print(f"train {relation}/{train_split}: {describe(subset)}")
-        train_examples.extend(subset)
-    if not train_examples:
-        raise SystemExit("no trainable examples - check the split and retrieval outputs")
+    rng = np.random.default_rng(seed)
 
+    # The paper fine-tunes on the validation split and tests on test, which leaves
+    # no clean set for checkpoint selection. Carve a dev slice out of the training
+    # pool, partitioned BY QUERY ENTITY so no disease appears on both sides.
+    train_examples: List = []
     eval_examples: List = []
     for relation in relations:
-        eval_examples.extend(
-            load_examples(
-                out_dir, relation, eval_split, data.rel2id, names, limit=eval_limit
-            )
+        raw = load_examples(
+            out_dir, relation, train_split, data.rel2id, names, limit=limit,
+            skip_unanswerable=False, dedup=False,
         )
+        pool, dev = split_by_query(raw, dev_frac, rng)
 
-    rng = np.random.default_rng(seed)
+        # dev stays per-triple and keeps unanswerable rows, so it measures the
+        # same thing the test evaluation will
+        if eval_limit and len(dev) > eval_limit:
+            picked = rng.choice(len(dev), size=eval_limit, replace=False)
+            dev = [dev[i] for i in sorted(picked)]
+
+        if skip_unanswerable:
+            pool = [e for e in pool if e.gold_in_candidates]
+        if dedup:
+            pool = dedup_by_query(pool)
+
+        print(f"train {relation}/{train_split}: {describe(pool)}")
+        print(f"dev   {relation}/{train_split}: {len(dev):,} prompts over "
+              f"{len({e.query_global_id for e in dev}):,} query entities")
+        train_examples.extend(pool)
+        eval_examples.extend(dev)
+
+    if not train_examples:
+        raise SystemExit("no trainable examples - check the split and retrieval outputs")
+    if not eval_examples:
+        raise SystemExit("no dev examples - raise --dev-frac")
+
     order = rng.permutation(len(train_examples))
     train_examples = [train_examples[i] for i in order]
     print(f"\n{len(train_examples):,} training prompts, {len(eval_examples):,} eval prompts")
@@ -292,6 +311,8 @@ def train(
         "train_split": train_split,
         "dedup": dedup,
         "skip_unanswerable": skip_unanswerable,
+        "dev_frac": dev_frac,
+        "eval_split_note": "dev slice carved from the training split by query entity",
         "epochs": epochs,
         "batch_size": batch_size,
         "grad_accum": grad_accum,
@@ -321,7 +342,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--evidence", default="embedding",
                         choices=["embedding", "text", "none"])
     parser.add_argument("--hidden-dim", type=int, default=128)
-    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--grad-accum", type=int, default=8)
     parser.add_argument("--lr", type=float, default=2e-4)
@@ -329,10 +350,14 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--no-dedup", action="store_true",
-                        help="one prompt per triple (paper-faithful, ~8x more prompts)")
+                        help="one prompt per triple (paper-faithful, ~8x more "
+                             "prompts). Recommended here: dedup leaves only ~187.")
     parser.add_argument("--keep-unanswerable", action="store_true")
     parser.add_argument("--eval-every", type=int, default=1)
     parser.add_argument("--eval-limit", type=int, default=200)
+    parser.add_argument("--dev-frac", type=float, default=0.15,
+                        help="fraction of training query entities held out for "
+                             "checkpoint selection")
     parser.add_argument("--no-quantise", action="store_true")
     parser.add_argument("--seed", type=int, default=SEED)
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -358,6 +383,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         skip_unanswerable=not args.keep_unanswerable,
         eval_every=args.eval_every,
         eval_limit=args.eval_limit,
+        dev_frac=args.dev_frac,
         quantise=not args.no_quantise,
         seed=args.seed,
     )

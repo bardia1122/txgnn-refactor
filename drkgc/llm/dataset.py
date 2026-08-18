@@ -110,14 +110,39 @@ def load_examples(
             examples.append(example)
 
     if dedup:
-        best: Dict[int, Example] = {}
-        for example in examples:
-            rank = example.gold_rank_in_candidates
-            current = best.get(example.query_global_id)
-            if current is None or (0 < rank < current.gold_rank_in_candidates):
-                best[example.query_global_id] = example
-        examples = list(best.values())
+        examples = dedup_by_query(examples)
     return examples
+
+
+def dedup_by_query(examples: Sequence[Example]) -> List[Example]:
+    """One example per query entity, keeping the one whose gold ranks highest."""
+    best: Dict[int, Example] = {}
+    for example in examples:
+        rank = example.gold_rank_in_candidates
+        current = best.get(example.query_global_id)
+        if current is None or (0 < rank < current.gold_rank_in_candidates):
+            best[example.query_global_id] = example
+    return list(best.values())
+
+
+def split_by_query(
+    examples: Sequence[Example], frac: float, rng
+) -> tuple:
+    """Partition examples into (major, minor) by **query entity**.
+
+    Splitting by entity rather than by row is essential: the same disease appears
+    in several triples, so a row-wise split would put near-identical prompts on
+    both sides and make the held-out score meaningless.
+    """
+    entities = sorted({e.query_global_id for e in examples})
+    if not entities or frac <= 0:
+        return list(examples), []
+    picked = rng.choice(len(entities), size=max(1, int(round(frac * len(entities)))),
+                        replace=False)
+    minor_ids = {entities[i] for i in picked}
+    major = [e for e in examples if e.query_global_id not in minor_ids]
+    minor = [e for e in examples if e.query_global_id in minor_ids]
+    return major, minor
 
 
 def name_lookup(entity_table) -> Dict[int, str]:
