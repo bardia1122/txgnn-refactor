@@ -121,13 +121,15 @@ def train(
     epochs: int = 5,
     batch_size: int = 1,
     grad_accum: int = 8,
-    lr: float = 2e-4,
+    lr: float = 5e-5,
     adapter_lr: Optional[float] = None,
     max_length: int = 2048,
     limit: Optional[int] = None,
     dedup: bool = True,
     skip_unanswerable: bool = True,
     eval_every: int = 1,
+    eval_steps: int = 25,
+    patience: int = 4,
     eval_limit: int = 200,
     dev_frac: float = 0.15,
     quantise: bool = True,
@@ -234,7 +236,50 @@ def train(
     )
 
     history: List[Dict] = []
-    best = {"hits@1": -1.0, "epoch": -1}
+    best = {"hits@1": -1.0, "epoch": -1, "step": -1}
+    optimiser_steps = 0
+    since_improved = 0
+    stop = False
+
+    def run_eval(tag: str) -> Dict:
+        """Evaluate on dev, checkpoint if improved, and report against the ranker."""
+        nonlocal best, since_improved, stop
+        model.eval()
+        rows = predict(
+            model, eval_examples, model.tokenizer, global_embeddings,
+            evidence, device, batch_size=max(1, batch_size * 2),
+        )
+        metrics = summarise(rows, seed=seed)
+        print(
+            f"  [{tag}] llm hits@1 {metrics['llm_hits@1']:.4f} "
+            f"(ranker {metrics['ranker_hits@1']:.4f}, "
+            f"delta {metrics['delta_hits@1']:+.4f}, "
+            f"unmatched {metrics['unmatched_rate']:.1%})",
+            flush=True,
+        )
+        if metrics["llm_hits@1"] > best["hits@1"]:
+            best = {
+                "hits@1": metrics["llm_hits@1"],
+                "epoch": epoch,
+                "step": optimiser_steps,
+            }
+            model.llm.save_pretrained(str(run_dir / "lora"))
+            if model.adapter is not None:
+                torch.save(
+                    {"state_dict": model.adapter.state_dict()}, run_dir / "adapter.pt"
+                )
+            print("    * checkpoint saved", flush=True)
+            since_improved = 0
+        else:
+            since_improved += 1
+            if patience and since_improved >= patience:
+                print(
+                    f"    early stopping: no dev improvement in {patience} evaluations",
+                    flush=True,
+                )
+                stop = True
+        model.train()
+        return metrics
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -261,7 +306,24 @@ def train(
                 optimiser.step()
                 scheduler.step()
                 optimiser.zero_grad()
-            if seen % (grad_accum * 25) == 0:
+                optimiser_steps += 1
+
+                # Step-level evaluation. The useful signal can arrive well inside
+                # the first epoch - epoch granularity misses the peak entirely.
+                if eval_steps and optimiser_steps % eval_steps == 0:
+                    print(
+                        f"  epoch {epoch} step {optimiser_steps} "
+                        f"loss {running / seen:.4f} ({time.time() - started:.0f}s)",
+                        flush=True,
+                    )
+                    metrics = run_eval(f"step {optimiser_steps}")
+                    history.append(
+                        {"epoch": epoch, "step": optimiser_steps,
+                         "loss": running / seen, "eval": metrics}
+                    )
+                    if stop:
+                        break
+            if not eval_steps and seen % (grad_accum * 25) == 0:
                 print(
                     f"  epoch {epoch} step {seen // grad_accum} "
                     f"loss {running / seen:.4f} ({time.time() - started:.0f}s)",
@@ -270,8 +332,11 @@ def train(
 
         epoch_loss = running / max(seen, 1)
         entry = {"epoch": epoch, "loss": epoch_loss}
+        if stop:
+            history.append(entry)
+            break
 
-        if epoch % eval_every == 0:
+        if not eval_steps and epoch % eval_every == 0:
             model.eval()
             rows = predict(
                 model, eval_examples, model.tokenizer, global_embeddings,
@@ -287,7 +352,8 @@ def train(
                 f"unmatched {metrics['unmatched_rate']:.1%})"
             )
             if metrics["llm_hits@1"] > best["hits@1"]:
-                best = {"hits@1": metrics["llm_hits@1"], "epoch": epoch}
+                best = {"hits@1": metrics["llm_hits@1"], "epoch": epoch,
+                        "step": optimiser_steps}
                 model.llm.save_pretrained(str(run_dir / "lora"))
                 if model.adapter is not None:
                     torch.save(
@@ -320,6 +386,7 @@ def train(
         "adapter_lr": adapter_lr or lr * 5,
         "seed": seed,
         "best_epoch": best["epoch"],
+        "best_step": best.get("step"),
         "best_eval_hits@1": best["hits@1"],
         "num_train_prompts": len(train_examples),
     }
@@ -345,7 +412,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--grad-accum", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--adapter-lr", type=float, default=None)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--limit", type=int, default=None)
@@ -354,6 +421,10 @@ def main(argv: Iterable[str] | None = None) -> None:
                              "prompts). Recommended here: dedup leaves only ~187.")
     parser.add_argument("--keep-unanswerable", action="store_true")
     parser.add_argument("--eval-every", type=int, default=1)
+    parser.add_argument("--eval-steps", type=int, default=25,
+                        help="evaluate every N optimiser steps; 0 = per epoch")
+    parser.add_argument("--patience", type=int, default=4,
+                        help="stop after N evaluations without dev improvement")
     parser.add_argument("--eval-limit", type=int, default=200)
     parser.add_argument("--dev-frac", type=float, default=0.15,
                         help="fraction of training query entities held out for "
@@ -382,6 +453,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         dedup=not args.no_dedup,
         skip_unanswerable=not args.keep_unanswerable,
         eval_every=args.eval_every,
+        eval_steps=args.eval_steps,
+        patience=args.patience,
         eval_limit=args.eval_limit,
         dev_frac=args.dev_frac,
         quantise=not args.no_quantise,
