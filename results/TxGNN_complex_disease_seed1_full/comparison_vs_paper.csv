@@ -1,0 +1,4 @@
+relation,this run — disease-centric AUPRC,this run — disease-centric AUROC,this run — edge-level AUPRC,paper (random split) AUPRC
+contraindication,0.16466955678011636,0.8033124175751617,0.7637676934948103,
+indication,0.13708723877962045,0.8767189500566558,0.8754393953798478,0.913
+off-label use,0.2119792956631532,0.8777310257793651,0.8496034694592705,
