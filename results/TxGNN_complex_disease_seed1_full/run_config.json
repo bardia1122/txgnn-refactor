@@ -1,0 +1,45 @@
+{
+  "config": {
+    "profile": "full",
+    "split": "complex_disease",
+    "seed": 1,
+    "device": "cuda:0",
+    "model": {
+      "n_hid": 100,
+      "n_inp": 100,
+      "n_out": 100,
+      "proto": true,
+      "proto_num": 3,
+      "attention": false,
+      "sim_measure": "all_nodes_profile",
+      "agg_measure": "rarity"
+    },
+    "pretrain": {
+      "n_epoch": 1,
+      "learning_rate": 0.001,
+      "batch_size": 1024,
+      "train_print_per_n": 100
+    },
+    "finetune": {
+      "n_epoch": 500,
+      "learning_rate": 0.0005,
+      "train_print_per_n": 5,
+      "valid_per_n": 20
+    },
+    "eval": {
+      "n_diseases": null,
+      "simulate_random": true
+    },
+    "explainer": {
+      "epochs_per_layer": 1000,
+      "valid_per_n": 20
+    }
+  },
+  "run_name": "TxGNN_complex_disease_seed1_full",
+  "n_params": 1015000,
+  "pretrain_seconds": 1153.4322414398193,
+  "finetune_seconds": 160.472003698349,
+  "torch": "2.6.0+cu118",
+  "pyg": "2.8.0",
+  "device": "NVIDIA GeForce RTX 4060 Ti"
+}
