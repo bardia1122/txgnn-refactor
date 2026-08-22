@@ -64,13 +64,18 @@ def build_synthetic_graph(seed=0):
         return torch.stack([torch.randint(0, n_src, (n_edges,), generator=g),
                             torch.randint(0, n_dst, (n_edges,), generator=g)])
 
-    # Drug-disease relations: every disease must appear in ALL of them, otherwise the shared
-    # disease-set check in _build_block_similarity correctly refuses to run.
-    all_dis = torch.arange(N_DISEASE)
-    for rel in DD_RELATIONS:
-        drugs = torch.randint(0, N_DRUG, (N_DISEASE,), generator=g)
-        G['drug', rel, 'disease'].edge_index = torch.stack([drugs, all_dis])
-        G['disease', 'rev_' + rel, 'drug'].edge_index = torch.stack([all_dis, drugs])
+    # Drug-disease relations, with a DIFFERENT disease set per relation -- this is what real
+    # PrimeKG looks like (a disease can have indication edges but no contraindication edges), and
+    # the union-based similarity tensor has to cope with it.
+    per_rel_diseases = {
+        'contraindication': torch.arange(0, 9),    # 9 diseases
+        'indication':       torch.arange(2, 12),   # 10 diseases, overlapping but not equal
+        'off-label use':    torch.arange(0, 12, 2),  # 6 diseases, strided
+    }
+    for rel, dis in per_rel_diseases.items():
+        drugs = torch.randint(0, N_DRUG, (len(dis),), generator=g)
+        G['drug', rel, 'disease'].edge_index = torch.stack([drugs, dis])
+        G['disease', 'rev_' + rel, 'drug'].edge_index = torch.stack([dis, drugs])
 
     # The four signature blocks (source must be 'disease': obtain_disease_profile_blocks
     # matches on edge_index[0]).
@@ -179,6 +184,59 @@ def test_forward_and_shapes(G):
           m.pred.sim_blocks.shape[0] == N_SIM_BLOCKS
           and m.pred.sim_blocks.shape[1] == m.pred.sim_blocks.shape[2],
           '(got %s)' % (tuple(m.pred.sim_blocks.shape),))
+
+
+def test_union_disease_sets(G):
+    """Real dd-etypes cover different disease sets; the shared tensor must span their union.
+
+    Regression test for the ValueError this used to raise on PrimeKG, where
+    contraindication covered 1004 diseases and indication 1124.
+    """
+    print('\n[4b] union of unequal per-etype disease sets')
+    m = make_model(G, 'gumbel_block')
+    pred = m.pred
+
+    expected_union = set()
+    expected_per_etype = {}
+    for rel in DD_RELATIONS:
+        for et in [('drug', rel, 'disease'), ('disease', 'rev_' + rel, 'drug')]:
+            ei = G[et].edge_index
+            ids = set((ei[1] if et[2] == 'disease' else ei[0]).tolist())
+            expected_per_etype[et] = ids
+            expected_union |= ids
+
+    check('etypes really do differ (otherwise this test proves nothing)',
+          len({frozenset(v) for v in expected_per_etype.values()}) > 1)
+    check('sim_blocks spans the union',
+          pred.sim_blocks.shape[1] == len(expected_union),
+          '(tensor %d vs union %d)' % (pred.sim_blocks.shape[1], len(expected_union)))
+    check('sim_blocks is square', pred.sim_blocks.shape[1] == pred.sim_blocks.shape[2])
+    check('index map covers the union',
+          set(pred.block_diseaseid2id) == expected_union)
+
+    ok = True
+    for et, ids in expected_per_etype.items():
+        cols = pred.block_key_cols.get(et)
+        if cols is None or len(cols) != len(ids):
+            ok = False
+            break
+        # Columns must resolve back to exactly that etype's diseases, in sorted order.
+        back = [int(pred.block_disease_ids[c]) for c in cols.tolist()]
+        if back != sorted(ids):
+            ok = False
+            break
+    check('per-etype key columns select that etype\'s own diseases', ok)
+
+    # And the whole thing must still run end to end.
+    neg = negative_graph(G)
+    m.train()
+    try:
+        scores, _, _, _ = m(G, neg, pretrain_mode=False, mode='train')
+        check('forward works with unequal disease sets',
+              all(torch.isfinite(v).all() for v in scores.values()))
+    except Exception as exc:
+        check('forward works with unequal disease sets', False,
+              '(%s: %s)' % (type(exc).__name__, exc))
 
 
 def test_zero_shot_unseen_disease(G):
@@ -369,6 +427,7 @@ def main():
     test_registration(G)
     test_rarity_checkpoint_compat(G)
     test_forward_and_shapes(G)
+    test_union_disease_sets(G)
     test_zero_shot_unseen_disease(G)
     test_gate_semantics(G)
     test_temperature_schedule(G)

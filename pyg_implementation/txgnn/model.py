@@ -231,13 +231,14 @@ class DistMultPredictor(nn.Module):
                 self.diseases_profile_etypes[etype] = diseases_profile
 
     def _build_block_similarity(self, G):
-        """Precompute one [N_SIM_BLOCKS, D, D] cosine-similarity tensor shared by all dd-etypes.
+        """Precompute one [N_SIM_BLOCKS, U, U] cosine-similarity tensor over the UNION of the
+        disease sets addressed by the drug-disease etypes.
 
-        The six drug-disease etypes address the same disease node set, so a per-etype copy would
-        store six near-identical [4, D, D] tensors. This verifies that assumption explicitly and
-        raises if it does not hold -- a silent per-etype fallback would quietly change the memory
-        and host<->device-sync characteristics partway through a long run.
-        Result lives on self.device so the per-step CPU->GPU copy of the old path disappears.
+        The etypes do NOT share a disease set on real data -- a disease can have `indication`
+        edges but no `contraindication` edges -- so each etype selects its own rows (queries) and
+        columns (keys) out of the shared union tensor. That keeps a single tensor instead of one
+        [4, D_e, D_e] copy per etype, without assuming anything about how the sets relate.
+        Result lives on self.device, so the per-step CPU->GPU copy of the old path disappears.
         """
         disease_sets = {}
         for etype in self.etypes_dd:
@@ -255,45 +256,51 @@ class DistMultPredictor(nn.Module):
         if not disease_sets:
             raise ValueError('No drug-disease etypes found in G; cannot build per-block similarity.')
 
-        etypes_present = list(disease_sets.keys())
-        reference_etype = etypes_present[0]
-        all_disease_ids = disease_sets[reference_etype]
-        for etype in etypes_present[1:]:
-            other = disease_sets[etype]
-            if other.shape != all_disease_ids.shape or not torch.equal(other, all_disease_ids):
-                raise ValueError(
-                    'Per-block similarity requires all drug-disease etypes to address an identical '
-                    'disease node set, but %s covers %d diseases and %s covers %d (or the ids '
-                    'differ). Sharing one similarity tensor would be wrong here.'
-                    % (reference_etype, len(all_disease_ids), etype, len(other)))
+        # Union of every etype's disease set. torch.unique returns sorted values, and each etype's
+        # own set is sorted too (torch.where), so the column order of a per-etype slice matches
+        # the row order of that etype's `disease_key` tensor in forward().
+        all_disease_ids = torch.unique(torch.cat(list(disease_sets.values())))
+        U = len(all_disease_ids)
+        id2row = {int(v): r for r, v in enumerate(all_disease_ids.tolist())}
 
-        D = len(all_disease_ids)
-        print('[block-sim] verified shared disease set across %d etypes, size D_e = %d'
-              % (len(etypes_present), D))
+        print('[block-sim] union disease set across %d etypes: U = %d' % (len(disease_sets), U))
+        for etype, ids in disease_sets.items():
+            print('[block-sim]   %-46s %5d diseases' % (str(etype), len(ids)))
 
         # Per-block binary signatures -> per-block cosine similarity.
         # The per-disease profiles are cached (CPU) so diseases unseen at init -- every zero-shot
         # test disease, which by construction has no drug-disease edge in the training graph --
         # can be scored lazily in _block_sim_fallback().
+        # Signatures are binary by construction, so they are cached as bool (8x smaller than the
+        # float32 the legacy path kept) and converted back on use.
         self.block_profiles = {}
         per_block_profiles = [[] for _ in range(N_SIM_BLOCKS)]
         for i in all_disease_ids:
             blocks = obtain_disease_profile_blocks(G, i, BLOCK_ETYPES, BLOCK_NODES)
-            self.block_profiles[i.item()] = blocks
+            self.block_profiles[i.item()] = [v.bool() for v in blocks]
             for b, vec in enumerate(blocks):
                 per_block_profiles[b].append(vec)
 
         sims = []
         for b in range(N_SIM_BLOCKS):
-            profile_tensor = torch.stack(per_block_profiles[b])          # [D, |V_block|]
-            sims.append(sim_matrix(profile_tensor, profile_tensor))      # [D, D]
+            profile_tensor = torch.stack(per_block_profiles[b])          # [U, |V_block|]
+            sims.append(sim_matrix(profile_tensor, profile_tensor))      # [U, U]
             print('[block-sim]   block %d (%s via %s): profile dim %d'
                   % (b, BLOCK_NODES[b], BLOCK_ETYPES[b], profile_tensor.shape[1]))
 
-        sim_blocks = torch.stack(sims).to(self.device)                   # [4, D, D]
+        sim_blocks = torch.stack(sims).to(self.device)                   # [4, U, U]
         self.register_buffer('sim_blocks', sim_blocks, persistent=False)
         self.block_disease_ids = all_disease_ids
-        self.block_diseaseid2id = dict(zip(all_disease_ids.detach().cpu().numpy(), range(D)))
+        self.block_diseaseid2id = id2row
+
+        # Column selector per etype: which union rows are that etype's key diseases. Depends only
+        # on G, which is fixed for the model's lifetime, so it is precomputed once here.
+        self.block_key_cols = {
+            etype: torch.as_tensor([id2row[int(i)] for i in ids.tolist()],
+                                   dtype=torch.long, device=self.device)
+            for etype, ids in disease_sets.items()
+        }
+
         print('[block-sim] similarity tensor %s on %s (%.1f MB)'
               % (tuple(sim_blocks.shape), self.device,
                  sim_blocks.numel() * sim_blocks.element_size() / 1e6))
@@ -308,13 +315,14 @@ class DistMultPredictor(nn.Module):
         """
         for i in list(query_ids) + list(key_ids):
             if i not in self.block_profiles:
-                self.block_profiles[i] = obtain_disease_profile_blocks(
-                    G, torch.tensor(i), BLOCK_ETYPES, BLOCK_NODES)
+                self.block_profiles[i] = [
+                    v.bool() for v in obtain_disease_profile_blocks(
+                        G, torch.tensor(i), BLOCK_ETYPES, BLOCK_NODES)]
 
         sims = []
         for b in range(N_SIM_BLOCKS):
-            q = torch.stack([self.block_profiles[i][b] for i in query_ids])
-            k = torch.stack([self.block_profiles[i][b] for i in key_ids])
+            q = torch.stack([self.block_profiles[i][b] for i in query_ids]).float()
+            k = torch.stack([self.block_profiles[i][b] for i in key_ids]).float()
             sims.append(sim_matrix(q, k))
         return torch.stack(sims).to(self.device)
 
@@ -478,15 +486,27 @@ class DistMultPredictor(nn.Module):
 
                     if self.block_mode:
                         # ---- per-block similarity path -------------------------------------
-                        # sim_blocks is [4, D, D]; columns are aligned with `disease_key` because
-                        # the key set IS block_disease_ids (verified identical across etypes at
-                        # init by _build_block_similarity).
+                        # sim_blocks is [4, U, U] over the UNION of the dd-etype disease sets, so
+                        # this etype selects its own rows (queries) and columns (keys) out of it.
                         query_ids = [i.item() for i in h_disease['disease_query_id'][0]]
-                        if all(i in self.block_diseaseid2id for i in query_ids):
+                        key_cols = self.block_key_cols.get(etype)
+                        if key_cols is not None and key_cols.device != self.sim_blocks.device:
+                            # block_key_cols is a plain dict, so nn.Module.to() does not move it
+                            # the way it moves the sim_blocks buffer. Re-home it once.
+                            key_cols = key_cols.to(self.sim_blocks.device)
+                            self.block_key_cols[etype] = key_cols
+                        if key_cols is not None and all(i in self.block_diseaseid2id for i in query_ids):
                             query_rows = torch.as_tensor(
                                 [self.block_diseaseid2id[i] for i in query_ids],
                                 dtype=torch.long, device=self.sim_blocks.device)
-                            sim_b = self.sim_blocks[:, query_rows, :]          # [4, N_q, D]
+                            # [4, N_q, N_keys] -- columns aligned with h_disease['disease_key'].
+                            sim_b = self.sim_blocks.index_select(1, query_rows).index_select(2, key_cols)
+                            if sim_b.shape[2] != h_disease['disease_key'].shape[0]:
+                                raise RuntimeError(
+                                    'Key-column mismatch for %s: similarity has %d key columns but '
+                                    'disease_key has %d rows. The graph passed to forward() differs '
+                                    'from the one the similarity was built from.'
+                                    % (str(etype), sim_b.shape[2], h_disease['disease_key'].shape[0]))
                         else:
                             # Zero-shot diseases: absent from the precomputed tensor by
                             # construction, so build their block signatures on demand.
