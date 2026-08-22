@@ -37,8 +37,8 @@
   },
   "run_name": "TxGNN_complex_disease_seed1_full",
   "n_params": 1015000,
-  "pretrain_seconds": 1155.749183177948,
-  "finetune_seconds": 316.52561044692993,
+  "pretrain_seconds": 2000,
+  "finetune_seconds": 2000,
   "torch": "2.6.0+cu118",
   "pyg": "2.8.0",
   "device": "NVIDIA GeForce RTX 4060 Ti"
