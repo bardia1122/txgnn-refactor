@@ -78,7 +78,12 @@ class TxGNN:
                                exp_lambda = 0.7,
                                num_walks = 200,
                                walk_mode = 'bit',
-                               path_length = 2):
+                               path_length = 2,
+                               gumbel_tau_start = 1.0,
+                               gumbel_tau_end = 0.3,
+                               gumbel_anneal_steps = 1000,
+                               gumbel_hidden = 64,
+                               gumbel_entropy_weight = 0.01):
 
         if self.no_kg and proto:
             print('Ablation study on No-KG. No proto learning is used...')
@@ -100,7 +105,15 @@ class TxGNN:
                        'agg_measure': agg_measure,
                        'num_walks': num_walks,
                        'walk_mode': walk_mode,
-                       'path_length': path_length
+                       'path_length': path_length,
+                       # exp_lambda was previously absent here, so save_model/load_pretrained
+                       # silently reset it to the 0.7 default on every reload.
+                       'exp_lambda': exp_lambda,
+                       'gumbel_tau_start': gumbel_tau_start,
+                       'gumbel_tau_end': gumbel_tau_end,
+                       'gumbel_anneal_steps': gumbel_anneal_steps,
+                       'gumbel_hidden': gumbel_hidden,
+                       'gumbel_entropy_weight': gumbel_entropy_weight
                       }
 
         self.model = HeteroRGCN(self.G,
@@ -119,7 +132,12 @@ class TxGNN:
                    split = self.split,
                    data_folder = self.data_folder,
                    exp_lambda = exp_lambda,
-                   device = self.device
+                   device = self.device,
+                   gumbel_tau_start = gumbel_tau_start,
+                   gumbel_tau_end = gumbel_tau_end,
+                   gumbel_anneal_steps = gumbel_anneal_steps,
+                   gumbel_hidden = gumbel_hidden,
+                   gumbel_entropy_weight = gumbel_entropy_weight
                   ).to(self.device)
         self.best_model = self.model
 
@@ -233,7 +251,15 @@ class TxGNN:
         optimizer = torch.optim.AdamW(self.model.parameters(), lr = learning_rate)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', 0.8)
 
+        entropy_weight = (self.config or {}).get('gumbel_entropy_weight', 0.0)
+
         for epoch in range(n_epoch):
+            # evaluate_fb() puts the model in eval mode and nothing used to restore it, so from the
+            # first validation onwards training ran with self.training == False. Harmless while the
+            # encoder had no dropout/batchnorm, but the Gumbel gate keys off self.training for its
+            # hard/soft switch and temperature anneal, so the mode must be reset every epoch.
+            self.model.train()
+
             negative_graph = neg_sampler(self.G)
             pred_score_pos, pred_score_neg, pos_score, neg_score = self.model(self.G, negative_graph, pretrain_mode = False, mode = 'train')
 
@@ -243,6 +269,13 @@ class TxGNN:
             scores = torch.sigmoid(torch.cat((pos_score, neg_score)).reshape(-1,))
             labels = [1] * len(pos_score) + [0] * len(neg_score)
             loss = F.binary_cross_entropy(scores, torch.Tensor(labels).float().to(self.device))
+
+            # Maximise gate entropy (hence the minus) to resist premature collapse to an
+            # always-on / always-off subset. Returns 0 for every non-Gumbel agg_measure.
+            gate_entropy = self.model.pop_gate_regularizer()
+            if entropy_weight:
+                loss = loss - entropy_weight * gate_entropy
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -411,6 +444,16 @@ class TxGNN:
     def retrieve_sim_diseases(self, relation, k = 5, path = None):
         if relation not in ['indication', 'contraindication', 'off-label']:
             raise ValueError("Please select the following three relations: 'indication', 'contraindication', 'off-label' !")
+
+        # Phase 4, not yet implemented: under a per-block agg_measure the flat per-etype similarity
+        # matrices this reads are not built (there is one shared [4, D, D] tensor instead). Fail
+        # with an explanation rather than a bare KeyError on sim_all_etypes.
+        if getattr(self.model.pred, 'block_mode', False):
+            raise NotImplementedError(
+                "retrieve_sim_diseases() has not been ported to per-block similarity "
+                "(agg_measure=%r). The per-block matrices are on model.pred.sim_blocks "
+                "[%d, D, D] with model.pred.block_diseaseid2id as the index map."
+                % (self.model.pred.agg_measure, self.model.pred.sim_blocks.shape[0]))
 
         etypes = self.dd_etypes
 

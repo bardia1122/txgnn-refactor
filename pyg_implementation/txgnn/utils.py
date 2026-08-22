@@ -1012,7 +1012,14 @@ def obtain_protein_random_walk_profile(disease, num_walks, path_len, g, disease_
             node_profile[x] = y/len(random_walks)
     return node_profile
 
-def obtain_disease_profile(G, disease, disease_etypes, disease_nodes):
+def obtain_disease_profile_blocks(G, disease, disease_etypes, disease_nodes):
+    """Per-block disease signature: one binary indicator vector per (relation, node type) block.
+
+    Returns a LIST of len(disease_etypes) tensors; block i has shape [G[disease_nodes[i]].num_nodes]
+    and marks which nodes of that type the disease is connected to via disease_etypes[i].
+    `obtain_disease_profile` is exactly torch.cat() of this list, so the flat and per-block views
+    stay in sync by construction (block boundaries = cumsum of the per-block widths).
+    """
     # disease_etypes contains relation name STRINGS (e.g. 'disease_disease', 'rev_disease_protein')
     profiles_for_each_disease_types = []
     for idx, disease_etype in enumerate(disease_etypes):
@@ -1031,7 +1038,12 @@ def obtain_disease_profile(G, disease, disease_etypes, disease_nodes):
         if len(nodes) > 0:
             node_profile[nodes] = 1.
         profiles_for_each_disease_types.append(node_profile)
-    return torch.cat(profiles_for_each_disease_types)
+    return profiles_for_each_disease_types
+
+def obtain_disease_profile(G, disease, disease_etypes, disease_nodes):
+    # Flat concatenation of the per-block signature. Behaviour is unchanged from before the
+    # per-block refactor: this is the single-vector view used by the legacy sim_measure paths.
+    return torch.cat(obtain_disease_profile_blocks(G, disease, disease_etypes, disease_nodes))
 
 def exponential(x, lamb):
     return lamb * torch.exp(-lamb * x) + 0.2
