@@ -107,6 +107,11 @@ class DistMultPredictor(nn.Module):
         self.gumbel_frozen = False
         # Entropy terms accumulated during forward() and drained by pop_gate_regularizer().
         self._gate_reg_terms = []
+        # Diagnostics: set record_gates=True to have forward() log every gate decision as
+        # (etype, disease_ids, gate_matrix[N_q, N_SIM_BLOCKS]) into self.gate_log. Off by default
+        # -- it holds one [N_q, 4] tensor per etype per forward.
+        self.record_gates = False
+        self.gate_log = []
 
         self.etypes_dd = [('drug', 'contraindication', 'disease'),
                            ('drug', 'indication', 'disease'),
@@ -357,6 +362,8 @@ class DistMultPredictor(nn.Module):
             entropy = -(probs * torch.log(probs.clamp(min=1e-9))).sum(dim=-1).mean()
             self._gate_reg_terms.append(entropy)
 
+        self._last_gate = gate.detach()
+
         n_open = gate.sum(dim=1, keepdim=True)                        # [N_q, 1]
         # MEAN over open gates, not sum: a sum lets the embedding norm grow with the number of
         # active blocks, which destabilises the bilinear DistMult score in _apply_edges.
@@ -503,6 +510,8 @@ class DistMultPredictor(nn.Module):
 
                         if self.agg_measure == 'gumbel_block':
                             out = self._gumbel_block_gate(h_disease['disease_query'], out_blocks)
+                            if self.record_gates:
+                                self.gate_log.append((etype, list(query_ids), self._last_gate.cpu()))
                         else:
                             # 'rarity_4block': fixed, unlearned recombination. Isolates "more
                             # signal" from "smarter gating" as separate contributions.
