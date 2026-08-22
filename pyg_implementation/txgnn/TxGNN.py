@@ -79,7 +79,7 @@ class TxGNN:
                                num_walks = 200,
                                walk_mode = 'bit',
                                path_length = 2,
-                               use_decision_network = False,
+                               use_decision_network = None,
                                gumbel_tau_start = 1.0,
                                gumbel_tau_end = 0.3,
                                gumbel_anneal_steps = 1000,
@@ -92,18 +92,22 @@ class TxGNN:
         # use_decision_network=True   -> the per-block Gumbel gate (agg_measure='gumbel_block').
         # agg_measure remains available for finer control ('rarity_4block' = four blocks with the
         # original fixed gate, i.e. more signal but no decision network).
-        if use_decision_network:
+        # None (the default) means "not specified" -- infer it from agg_measure, so configs saved
+        # before this flag existed still load. Only an EXPLICIT False contradicts 'gumbel_block'.
+        if use_decision_network is None:
+            use_decision_network = (agg_measure == 'gumbel_block')
+        elif use_decision_network:
             if agg_measure not in BLOCK_AGG_MEASURES and agg_measure != 'rarity':
                 raise ValueError(
                     'use_decision_network=True conflicts with agg_measure=%r. Either leave '
                     'agg_measure at its default or pass use_decision_network=False.' % agg_measure)
-            agg_measure = 'gumbel_block'
         elif agg_measure == 'gumbel_block':
             raise ValueError(
-                "agg_measure='gumbel_block' needs the decision network. Pass "
-                'use_decision_network=True (or choose another agg_measure).')
+                "use_decision_network=False contradicts agg_measure='gumbel_block'. Pass "
+                'use_decision_network=True, or choose another agg_measure.')
 
         if use_decision_network:
+            agg_measure = 'gumbel_block'
             print("[TxGNN] decision network ON  -- agg_measure='gumbel_block' "
                   "(%d similarity blocks, learned per-block Gumbel gate)" % N_SIM_BLOCKS)
         else:

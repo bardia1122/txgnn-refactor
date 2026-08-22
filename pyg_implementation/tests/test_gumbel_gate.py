@@ -475,12 +475,25 @@ def test_decision_network_switch(G):
             except ValueError:
                 check('rejects %s' % why, True)
 
-        # An old config.pkl has no use_decision_network key -> must still load as the old path.
-        legacy = {k: v for k, v in off.config.items() if k != 'use_decision_network'}
+        # An old config.pkl has no use_decision_network key -> must still load, inferring the
+        # flag from agg_measure rather than raising.
+        legacy_off = {k: v for k, v in off.config.items() if k != 'use_decision_network'}
         t = TxGNN(data=data, weight_bias_track=False, device='cpu')
-        t.model_initialize(**legacy)
-        check('legacy config without the flag loads as the original path',
+        t.model_initialize(**legacy_off)
+        check('legacy rarity config (no flag) loads as the original path',
               not getattr(t.model.pred, 'block_mode', False))
+
+        # The case that actually broke: a checkpoint saved after 'gumbel_block' existed but
+        # before the flag did. agg_measure alone must be enough to infer the gate.
+        legacy_on = {k: v for k, v in on.config.items() if k != 'use_decision_network'}
+        try:
+            t2 = TxGNN(data=data, weight_bias_track=False, device='cpu')
+            t2.model_initialize(**legacy_on)
+            check('legacy gumbel_block config (no flag) infers the decision network',
+                  t2.model.pred.block_mode and t2.config['use_decision_network'] is True)
+        except Exception as exc:
+            check('legacy gumbel_block config (no flag) infers the decision network', False,
+                  '(%s: %s)' % (type(exc).__name__, exc))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(data.data_folder, ignore_errors=True)
