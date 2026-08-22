@@ -79,11 +79,35 @@ class TxGNN:
                                num_walks = 200,
                                walk_mode = 'bit',
                                path_length = 2,
+                               use_decision_network = False,
                                gumbel_tau_start = 1.0,
                                gumbel_tau_end = 0.3,
                                gumbel_anneal_steps = 1000,
                                gumbel_hidden = 64,
                                gumbel_entropy_weight = 0.01):
+
+        # ── master switch: learned decision network on or off ───────────────────────────
+        # use_decision_network=False  -> the original TxGNN code path, unchanged. agg_measure is
+        #                                whatever you pass ('rarity' by default).
+        # use_decision_network=True   -> the per-block Gumbel gate (agg_measure='gumbel_block').
+        # agg_measure remains available for finer control ('rarity_4block' = four blocks with the
+        # original fixed gate, i.e. more signal but no decision network).
+        if use_decision_network:
+            if agg_measure not in BLOCK_AGG_MEASURES and agg_measure != 'rarity':
+                raise ValueError(
+                    'use_decision_network=True conflicts with agg_measure=%r. Either leave '
+                    'agg_measure at its default or pass use_decision_network=False.' % agg_measure)
+            agg_measure = 'gumbel_block'
+        elif agg_measure == 'gumbel_block':
+            raise ValueError(
+                "agg_measure='gumbel_block' needs the decision network. Pass "
+                'use_decision_network=True (or choose another agg_measure).')
+
+        if use_decision_network:
+            print("[TxGNN] decision network ON  -- agg_measure='gumbel_block' "
+                  "(%d similarity blocks, learned per-block Gumbel gate)" % N_SIM_BLOCKS)
+        else:
+            print("[TxGNN] decision network OFF -- agg_measure=%r (original code path)" % agg_measure)
 
         if self.no_kg and proto:
             print('Ablation study on No-KG. No proto learning is used...')
@@ -109,6 +133,7 @@ class TxGNN:
                        # exp_lambda was previously absent here, so save_model/load_pretrained
                        # silently reset it to the 0.7 default on every reload.
                        'exp_lambda': exp_lambda,
+                       'use_decision_network': use_decision_network,
                        'gumbel_tau_start': gumbel_tau_start,
                        'gumbel_tau_end': gumbel_tau_end,
                        'gumbel_anneal_steps': gumbel_anneal_steps,

@@ -409,6 +409,83 @@ def test_config_persistence(G):
         shutil.rmtree(data.data_folder, ignore_errors=True)
 
 
+def test_decision_network_switch(G):
+    """The use_decision_network boolean: True = Gumbel gate, False = original code path."""
+    print('\n[10] use_decision_network master switch')
+    from txgnn import TxGNN
+
+    class FakeData:
+        pass
+
+    rows = []
+    for rel in DD_RELATIONS:
+        for d in range(N_DISEASE):
+            rows.append({'x_idx': d % N_DRUG, 'relation': rel, 'y_idx': d,
+                         'x_type': 'drug', 'y_type': 'disease',
+                         'x_id': str(d % N_DRUG), 'y_id': str(d)})
+    df = pd.DataFrame(rows)
+
+    data = FakeData()
+    data.G = build_synthetic_graph()
+    data.df = data.df_train = data.df_valid = data.df_test = df
+    data.data_folder = tempfile.mkdtemp()
+    data.disease_eval_idx = None
+    data.split = 'random'
+    data.no_kg = False
+
+    tmp = tempfile.mkdtemp()
+    try:
+        common = dict(n_hid=HID, n_inp=HID, n_out=HID, proto=True, proto_num=3,
+                      sim_measure='all_nodes_profile', gumbel_hidden=8)
+
+        # OFF -> original path, no gate parameters at all.
+        off = TxGNN(data=data, weight_bias_track=False, device='cpu')
+        off.model_initialize(use_decision_network=False, **common)
+        check('OFF resolves to agg_measure="rarity"',
+              off.config['agg_measure'] == 'rarity', '(got %r)' % off.config['agg_measure'])
+        check('OFF builds no block-similarity tensor',
+              not getattr(off.model.pred, 'block_mode', False))
+        check('OFF has no gate parameters in state_dict',
+              not any('gate_mlps' in k for k in off.model.state_dict()))
+
+        # ON -> Gumbel gate.
+        on = TxGNN(data=data, weight_bias_track=False, device='cpu')
+        on.model_initialize(use_decision_network=True, **common)
+        check('ON resolves to agg_measure="gumbel_block"',
+              on.config['agg_measure'] == 'gumbel_block', '(got %r)' % on.config['agg_measure'])
+        check('ON builds the block-similarity tensor', on.model.pred.block_mode)
+        check('ON has gate parameters', any('gate_mlps' in k for k in on.model.state_dict()))
+
+        # The flag must survive save -> load and rebuild the same architecture.
+        d_on = os.path.join(tmp, 'on')
+        on.save_model(d_on)
+        back = TxGNN(data=data, weight_bias_track=False, device='cpu')
+        back.load_pretrained(d_on)
+        check('flag round-trips through save/load',
+              back.config['use_decision_network'] is True and back.model.pred.block_mode)
+
+        # Contradictory combinations must be refused, not silently reinterpreted.
+        for kwargs, why in [
+                (dict(use_decision_network=False, agg_measure='gumbel_block'), 'OFF + gumbel_block'),
+                (dict(use_decision_network=True, agg_measure='avg'), 'ON + avg')]:
+            try:
+                t = TxGNN(data=data, weight_bias_track=False, device='cpu')
+                t.model_initialize(**dict(common, **kwargs))
+                check('rejects %s' % why, False, '(no exception)')
+            except ValueError:
+                check('rejects %s' % why, True)
+
+        # An old config.pkl has no use_decision_network key -> must still load as the old path.
+        legacy = {k: v for k, v in off.config.items() if k != 'use_decision_network'}
+        t = TxGNN(data=data, weight_bias_track=False, device='cpu')
+        t.model_initialize(**legacy)
+        check('legacy config without the flag loads as the original path',
+              not getattr(t.model.pred, 'block_mode', False))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(data.data_folder, ignore_errors=True)
+
+
 def test_invalid_agg_measure(G):
     print('\n[8] loud failure on unknown agg_measure')
     try:
@@ -432,6 +509,7 @@ def main():
     test_gate_semantics(G)
     test_temperature_schedule(G)
     test_config_persistence(G)
+    test_decision_network_switch(G)
     test_invalid_agg_measure(G)
 
     print('\n' + '=' * 60)
