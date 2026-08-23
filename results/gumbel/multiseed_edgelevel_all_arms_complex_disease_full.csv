@@ -1,0 +1,9 @@
+relation,"A · baseline (rarity, 2 blocks)","B · 4 blocks, fixed gate","C · 4 blocks, learned Gumbel gate"
+drug --contraindication--> disease,0.7252 ± 0.0525,0.6694 ± 0.0269,0.6515 ± 0.0394
+drug --indication--> disease,0.8441 ± 0.0385,0.8181 ± 0.0173,0.7958 ± 0.0338
+drug --off-label use--> disease,0.7997 ± 0.0172,0.7681 ± 0.0269,0.7603 ± 0.0212
+disease --rev_contraindication--> drug,0.7121 ± 0.022,0.6808 ± 0.0138,0.6579 ± 0.0185
+disease --rev_indication--> drug,0.8154 ± 0.0334,0.7916 ± 0.0207,0.7801 ± 0.0311
+disease --rev_off-label use--> drug,0.7967 ± 0.0338,0.7823 ± 0.0341,0.7627 ± 0.0397
+MICRO (all relations),0.7592 ± 0.0329,0.7204 ± 0.02,0.701 ± 0.0272
+MACRO (all relations),0.7822 ± 0.0229,0.7517 ± 0.0141,0.7347 ± 0.0232

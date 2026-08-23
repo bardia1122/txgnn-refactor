@@ -1,0 +1,35 @@
+{
+  "arm": "C_gumbel_block",
+  "label": "C \u00b7 4 blocks, learned Gumbel gate",
+  "seed": 3,
+  "split": "complex_disease",
+  "profile": "full",
+  "model": {
+    "n_hid": 100,
+    "n_inp": 100,
+    "n_out": 100,
+    "proto": true,
+    "proto_num": 3,
+    "attention": false,
+    "sim_measure": "all_nodes_profile",
+    "exp_lambda": 0.7,
+    "use_decision_network": true,
+    "agg_measure": "gumbel_block",
+    "gumbel_tau_start": 1.0,
+    "gumbel_tau_end": 0.3,
+    "gumbel_anneal_steps": 1000,
+    "gumbel_hidden": 64,
+    "gumbel_entropy_weight": 0.01
+  },
+  "finetune": {
+    "n_epoch": 1000,
+    "learning_rate": 0.0005,
+    "train_print_per_n": 50,
+    "valid_per_n": 20
+  },
+  "pretrained_from": "/home/dsls/Desktop/projects/BardiaSabbagh/txgnn-refactor/saved_models/shared_pretrained/complex_disease_seed3",
+  "n_params": 1066976,
+  "finetune_seconds": 299.1914689540863,
+  "torch": "2.6.0+cu118",
+  "pyg": "2.8.0"
+}

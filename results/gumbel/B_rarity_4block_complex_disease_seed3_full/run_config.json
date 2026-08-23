@@ -1,0 +1,30 @@
+{
+  "arm": "B_rarity_4block",
+  "label": "B \u00b7 4 blocks, fixed gate",
+  "seed": 3,
+  "split": "complex_disease",
+  "profile": "full",
+  "model": {
+    "n_hid": 100,
+    "n_inp": 100,
+    "n_out": 100,
+    "proto": true,
+    "proto_num": 3,
+    "attention": false,
+    "sim_measure": "all_nodes_profile",
+    "exp_lambda": 0.7,
+    "use_decision_network": false,
+    "agg_measure": "rarity_4block"
+  },
+  "finetune": {
+    "n_epoch": 1000,
+    "learning_rate": 0.0005,
+    "train_print_per_n": 50,
+    "valid_per_n": 20
+  },
+  "pretrained_from": "/home/dsls/Desktop/projects/BardiaSabbagh/txgnn-refactor/saved_models/shared_pretrained/complex_disease_seed3",
+  "n_params": 1015000,
+  "finetune_seconds": 287.224915266037,
+  "torch": "2.6.0+cu118",
+  "pyg": "2.8.0"
+}
