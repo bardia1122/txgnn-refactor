@@ -202,17 +202,25 @@ def apply_mlp_fusion(model, norm, feats):
 # ---------------------------------------------------------------------------
 
 def evaluate_variants(preds_a, preds_b, labels, rel_drug_ids, degrees,
-                      relation, seed, split, fusion=None):
+                      relation, seed, split, fusion=None, keep_ids=None):
     """Build the tidy per-disease table for every variant of one relation.
 
     ``degrees`` maps disease_id -> {'dd_degree_train': int, 'kg_degree': int}.
     ``fusion`` is None (rank-average only) or a dict with keys 'w' and/or
     ('mlp', 'norm') to add the learned variants.
+    ``keep_ids`` restricts the diseases scored. Needed because a disease-area split's
+    test set is NOT uniformly zero-shot: the ontology holdout and
+    data/disease_files/<area>.csv disagree, so a disease can appear in df_test (via the
+    random test fraction) while keeping all its training drug edges. Passing the
+    zero-train-degree subset here keeps the protocol honest.
 
     Returns a long DataFrame: one row per (disease, variant).
     """
     rows = []
+    keep = None if keep_ids is None else set(keep_ids)
     for disease_id in preds_a:
+        if keep is not None and disease_id not in keep:
+            continue
         _, p_a, lab = filter_candidates(preds_a[disease_id], labels[disease_id], rel_drug_ids)
         _, p_b, _ = filter_candidates(preds_b[disease_id], labels[disease_id], rel_drug_ids)
 
