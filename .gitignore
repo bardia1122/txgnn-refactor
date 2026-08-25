@@ -131,6 +131,7 @@ dmypy.json
 .claude/
 PYG_REFACTOR.md
 mock/
+docs/
 data/
 comparison_outputs/
 saved_models/
