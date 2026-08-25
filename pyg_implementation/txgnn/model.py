@@ -17,13 +17,14 @@ from torch_geometric.data import HeteroData
 from torch_geometric.utils import degree, softmax
 from torch_scatter import scatter
 
-from .utils import sim_matrix, exponential, obtain_disease_profile, obtain_protein_random_walk_profile, convert2str
+from .utils import sim_matrix, exponential, obtain_disease_profile, obtain_protein_random_walk_profile, convert2str, obtain_drug_profile, build_drug_profile_matrix
 from .graphmask.multiple_inputs_layernorm_linear import MultipleInputsLayernormLinear
 from .graphmask.squeezer import Squeezer
 from .graphmask.sigmoid_penalty import SoftConcrete
 
 class DistMultPredictor(nn.Module):
-    def __init__(self, n_hid, w_rels, G, rel2idx, proto, proto_num, sim_measure, bert_measure, agg_measure, num_walks, walk_mode, path_length, split, data_folder, exp_lambda, device):
+    def __init__(self, n_hid, w_rels, G, rel2idx, proto, proto_num, sim_measure, bert_measure, agg_measure, num_walks, walk_mode, path_length, split, data_folder, exp_lambda, device,
+                 drug_proto = False, drug_proto_num = 3, drug_sim_measure = 'drug_protein_profile', exp_lambda_drug = 0.7):
         super().__init__()
 
         self.proto = proto
@@ -121,6 +122,78 @@ class DistMultPredictor(nn.Module):
                 self.diseaseid2id_etypes[etype] = diseaseid2id
                 self.diseases_profile_etypes[etype] = diseases_profile
 
+        # -- drug-side pooling (Option A, score path 'B') -------------------------
+        # Parameter-free: the gate is utils.exponential(), and W_gate['drug'] already
+        # exists in the baseline. Nothing here draws from the torch RNG, so score path
+        # 'A' stays bit-for-bit identical whether this is enabled or not.
+        self.drug_proto       = drug_proto
+        self.drug_k           = drug_proto_num
+        self.drug_sim_measure = drug_sim_measure
+        self.exp_lambda_drug  = exp_lambda_drug
+        self.score_path       = 'A'      # 'A' = original TxGNN, 'B' = drug-pooled
+
+        self.drug_topk_idx, self.drug_topk_coef = {}, {}
+        self.drug_key_ids, self.drug_profile_valid = {}, {}
+
+        if drug_proto:
+            if drug_sim_measure == 'drug_protein_profile':        # variant (a), PRIMARY
+                drug_etypes, drug_nodes = ['drug_protein'], ['gene/protein']
+            elif drug_sim_measure == 'drug_all_profile':          # variant (b), ablation
+                drug_etypes, drug_nodes = ['drug_drug', 'drug_protein'], ['drug', 'gene/protein']
+            else:
+                raise ValueError('unknown drug_sim_measure: %s' % drug_sim_measure)
+
+            num_drugs = G['drug'].num_nodes
+            profile, valid = build_drug_profile_matrix(G, drug_etypes, drug_nodes, num_drugs)
+
+            for etype in self.etypes_dd:
+                if etype not in G.edge_types:
+                    continue
+                rel_base = etype[1][4:] if etype[1].startswith('rev_') else etype[1]
+                if rel_base in self.drug_topk_idx:
+                    continue          # both directions of a relation share one cache
+
+                # keys = drugs with >=1 edge of this relation in the TRAIN graph, i.e.
+                # drugs whose indications are actually known. Mirrors the disease side.
+                if etype[0] == 'drug':
+                    deg = degree(G[etype].edge_index[0], num_nodes = num_drugs)
+                else:
+                    deg = degree(G[etype].edge_index[1], num_nodes = num_drugs)
+                key_ids = torch.where(deg != 0)[0].cpu()
+                if len(key_ids) < 2:
+                    continue
+
+                # Query rows = ALL drugs. At eval, get_scores_disease scores every drug
+                # in the KG, most of which are absent from key_ids, so the disease side's
+                # on-the-fly except-branch would fire for ~6k drugs per disease per
+                # relation. Precomputing every row once avoids that entirely.
+                key_profile = profile[key_ids]
+                id2key = torch.full((num_drugs,), -1, dtype = torch.long)
+                id2key[key_ids] = torch.arange(len(key_ids))
+
+                kk = min(self.drug_k, len(key_ids) - 1)
+                idx_l, coef_l = [], []
+                for lo in range(0, num_drugs, 1024):              # chunked cosine
+                    hi = min(lo + 1024, num_drugs)
+                    sim = sim_matrix(profile[lo:hi], key_profile)
+                    # Never pool a drug with itself. Unlike held-out diseases, query
+                    # drugs ARE generally present in the key set, so the disease side's
+                    # shape heuristic would not catch the self-match.
+                    self_col = id2key[torch.arange(lo, hi)]
+                    hit = self_col >= 0
+                    if hit.any():
+                        sim[hit.nonzero(as_tuple = True)[0], self_col[hit]] = -1.0
+                    v, i = torch.topk(sim, kk, dim = 1)
+                    idx_l.append(i)
+                    coef_l.append(F.normalize(v.clamp(min = 0), p = 1, dim = 1))
+                    del sim
+
+                self.drug_topk_idx[rel_base]      = torch.cat(idx_l)
+                self.drug_topk_coef[rel_base]     = torch.cat(coef_l)
+                self.drug_key_ids[rel_base]       = key_ids
+                self.drug_profile_valid[rel_base] = valid.float()
+            del profile
+
     def _apply_edges(self, graph, etype, h):
         """Inline DistMult scoring: score = sum(h_u * h_r * h_v, dim=1)"""
         src, rel, dst = etype
@@ -168,7 +241,8 @@ class DistMultPredictor(nn.Module):
 
             for etype in etypes_train:
 
-                if self.proto and etype in self.sim_all_etypes:
+                drug_branch = None
+                if self.proto and etype in self.sim_all_etypes and self.score_path == 'A':
                     src, dst = etype[0], etype[2]
                     graph_out_deg = degree(graph[etype].edge_index[0], num_nodes=graph[src].num_nodes)
                     graph_in_deg = degree(graph[etype].edge_index[1], num_nodes=graph[dst].num_nodes)
@@ -293,14 +367,50 @@ class DistMultPredictor(nn.Module):
                         h[src][src_rel_idx] = proto_emb_src
                         h[dst][dst_rel_idx] = proto_emb_dst
 
+                elif self.drug_proto and self.score_path == 'B' and \
+                        (etype[1][4:] if etype[1].startswith('rev_') else etype[1]) in self.drug_topk_idx:
+                    # -- score path 'B': plain disease embedding, drug-pooled drug side --
+                    # Mutually exclusive with the disease branch above by construction, so
+                    # h['disease'] and h['drug'] can never be pooled in the same pass.
+                    rel_base  = etype[1][4:] if etype[1].startswith('rev_') else etype[1]
+                    drug_type = 'drug'
+                    if etype[0] == 'drug':
+                        graph_deg = degree(graph[etype].edge_index[0], num_nodes = graph[drug_type].num_nodes)
+                        G_deg     = degree(G[etype].edge_index[0],     num_nodes = G[drug_type].num_nodes)
+                    else:
+                        graph_deg = degree(graph[etype].edge_index[1], num_nodes = graph[drug_type].num_nodes)
+                        G_deg     = degree(G[etype].edge_index[1],     num_nodes = G[drug_type].num_nodes)
+
+                    drug_query_idx = torch.where(graph_deg != 0)
+                    drug_h_orig    = h[drug_type][drug_query_idx]     # advanced index -> copy
+                    q              = drug_query_idx[0].detach().cpu()
+
+                    dev     = h[drug_type].device
+                    key_ids = self.drug_key_ids[rel_base].to(dev)
+                    idx     = self.drug_topk_idx[rel_base][q].to(dev)
+                    coef    = self.drug_topk_coef[rel_base][q].to(dev)
+                    embed   = h[drug_type][key_ids][idx]
+                    out_d   = torch.mul(embed, coef.unsqueeze(dim = 2)).sum(dim = 1)
+
+                    coef_all = exponential(G_deg[drug_query_idx], self.exp_lambda_drug).reshape(-1, 1).to(dev)
+                    # A drug with an empty signature has nothing to borrow: keep its own
+                    # embedding rather than shrinking it toward the origin.
+                    coef_all = coef_all * self.drug_profile_valid[rel_base][q].to(dev).reshape(-1, 1)
+
+                    h[drug_type][drug_query_idx] = (1 - coef_all) * drug_h_orig + coef_all * out_d
+                    drug_branch = (drug_type, drug_query_idx, drug_h_orig)
+
                 out = self._apply_edges(graph, etype, h)
                 s_l.append(out)
                 scores[etype] = out
 
-                if self.proto and etype in self.sim_all_etypes:
+                if self.proto and etype in self.sim_all_etypes and self.score_path == 'A':
                     # recover back to the original embeddings for other relations
                     h[src][src_rel_idx] = src_h
                     h[dst][dst_rel_idx] = dst_h
+                elif drug_branch is not None:
+                    dt, di, dh = drug_branch
+                    h[dt][di] = dh
 
 
         if pretrain_mode:
@@ -502,7 +612,8 @@ class HeteroRGCNLayer(nn.Module):
         return out, penalty, self.num_masked
 
 class HeteroRGCN(nn.Module):
-    def __init__(self, G, in_size, hidden_size, out_size, attention, proto, proto_num, sim_measure, bert_measure, agg_measure, num_walks, walk_mode, path_length, split, data_folder, exp_lambda, device):
+    def __init__(self, G, in_size, hidden_size, out_size, attention, proto, proto_num, sim_measure, bert_measure, agg_measure, num_walks, walk_mode, path_length, split, data_folder, exp_lambda, device,
+                 drug_proto = False, drug_proto_num = 3, drug_sim_measure = 'drug_protein_profile', exp_lambda_drug = 0.7):
         super(HeteroRGCN, self).__init__()
 
         etypes = [et[1] for et in G.edge_types]
@@ -518,7 +629,8 @@ class HeteroRGCN(nn.Module):
         nn.init.xavier_uniform_(self.w_rels, gain=nn.init.calculate_gain('relu'))
         rel2idx = dict(zip(G.edge_types, list(range(len(G.edge_types)))))
 
-        self.pred = DistMultPredictor(n_hid = hidden_size, w_rels = self.w_rels, G = G, rel2idx = rel2idx, proto = proto, proto_num = proto_num, sim_measure = sim_measure, bert_measure = bert_measure, agg_measure = agg_measure, num_walks = num_walks, walk_mode = walk_mode, path_length = path_length, split = split, data_folder = data_folder, exp_lambda = exp_lambda, device = device)
+        self.pred = DistMultPredictor(n_hid = hidden_size, w_rels = self.w_rels, G = G, rel2idx = rel2idx, proto = proto, proto_num = proto_num, sim_measure = sim_measure, bert_measure = bert_measure, agg_measure = agg_measure, num_walks = num_walks, walk_mode = walk_mode, path_length = path_length, split = split, data_folder = data_folder, exp_lambda = exp_lambda, device = device,
+                                          drug_proto = drug_proto, drug_proto_num = drug_proto_num, drug_sim_measure = drug_sim_measure, exp_lambda_drug = exp_lambda_drug)
         self.attention = attention
 
         self.hidden_size = hidden_size

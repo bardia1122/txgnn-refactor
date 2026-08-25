@@ -1033,6 +1033,62 @@ def obtain_disease_profile(G, disease, disease_etypes, disease_nodes):
         profiles_for_each_disease_types.append(node_profile)
     return torch.cat(profiles_for_each_disease_types)
 
+def obtain_drug_profile(G, drug, drug_etypes, drug_nodes):
+    """Drug-side mirror of obtain_disease_profile.
+
+    Canonical directions verified against PrimeKG: 'drug_protein' and 'drug_drug' are
+    both stored drug-first, so neither takes a 'rev_' prefix -- the opposite of the
+    disease side, which needs 'rev_disease_protein'. 'drug_drug' is homogeneous, so
+    reverse_rel_generation keeps the same relation name and edge_index already holds
+    both directions.
+
+    Kept for API parity / testing; the model builds its profiles with the vectorised
+    build_drug_profile_matrix below.
+    """
+    profiles_for_each_drug_types = []
+    for idx, drug_etype in enumerate(drug_etypes):
+        matching = [et for et in G.edge_types if et[1] == drug_etype]
+        if matching:
+            et = matching[0]
+            ei = G[et].edge_index
+            node_val = drug.item() if hasattr(drug, 'item') else int(drug)
+            mask = ei[0] == node_val
+            nodes = ei[1, mask]
+        else:
+            nodes = torch.tensor([], dtype=torch.long)
+        num_nodes = G[drug_nodes[idx]].num_nodes
+        node_profile = torch.zeros((num_nodes,))
+        if len(nodes) > 0:
+            node_profile[nodes] = 1.
+        profiles_for_each_drug_types.append(node_profile)
+    return torch.cat(profiles_for_each_drug_types)
+
+
+def build_drug_profile_matrix(G, drug_etypes, drug_nodes, num_drugs):
+    """Vectorised equivalent of stacking obtain_drug_profile over every drug.
+
+    The per-node loop the disease side uses costs ~3.2 s for ~1.1k diseases; over
+    7,957 drugs against a 2.7M-edge drug_drug index it is minutes. This scatters
+    straight from edge_index instead.
+
+    Returns (profile, valid):
+        profile : (num_drugs, D) float32 binary indicator matrix
+        valid   : (num_drugs,) bool -- False where the drug has an empty signature
+    """
+    blocks = []
+    for etype_name, ntype in zip(drug_etypes, drug_nodes):
+        matching = [et for et in G.edge_types if et[1] == etype_name]
+        width = G[ntype].num_nodes
+        block = torch.zeros((num_drugs, width))
+        if matching:
+            ei = G[matching[0]].edge_index.cpu()
+            keep = ei[0] < num_drugs
+            block[ei[0][keep], ei[1][keep]] = 1.
+        blocks.append(block)
+    profile = torch.cat(blocks, dim=1)
+    return profile, (profile.sum(dim=1) > 0)
+
+
 def exponential(x, lamb):
     return lamb * torch.exp(-lamb * x) + 0.2
 

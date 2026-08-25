@@ -78,7 +78,11 @@ class TxGNN:
                                exp_lambda = 0.7,
                                num_walks = 200,
                                walk_mode = 'bit',
-                               path_length = 2):
+                               path_length = 2,
+                               drug_proto = False,
+                               drug_proto_num = 3,
+                               drug_sim_measure = 'drug_protein_profile',
+                               exp_lambda_drug = 0.7):
 
         if self.no_kg and proto:
             print('Ablation study on No-KG. No proto learning is used...')
@@ -100,7 +104,13 @@ class TxGNN:
                        'agg_measure': agg_measure,
                        'num_walks': num_walks,
                        'walk_mode': walk_mode,
-                       'path_length': path_length
+                       'path_length': path_length,
+                       'exp_lambda': exp_lambda,        # was omitted: load_pretrained
+                                                        # silently reverted it to 0.7
+                       'drug_proto': drug_proto,
+                       'drug_proto_num': drug_proto_num,
+                       'drug_sim_measure': drug_sim_measure,
+                       'exp_lambda_drug': exp_lambda_drug,
                       }
 
         self.model = HeteroRGCN(self.G,
@@ -119,9 +129,31 @@ class TxGNN:
                    split = self.split,
                    data_folder = self.data_folder,
                    exp_lambda = exp_lambda,
-                   device = self.device
+                   device = self.device,
+                   drug_proto = drug_proto,
+                   drug_proto_num = drug_proto_num,
+                   drug_sim_measure = drug_sim_measure,
+                   exp_lambda_drug = exp_lambda_drug
                   ).to(self.device)
         self.best_model = self.model
+
+    def set_score_path(self, path):
+        """Select which decoder read-out scores drug-disease pairs.
+
+        'A' -- original TxGNN: disease-pooled h_i^hat against plain h_j.
+        'B' -- plain h_i against drug-pooled h_j^hat.
+
+        The two are mutually exclusive inside DistMultPredictor.forward, so a pair is
+        never scored with both ends pooled. Path 'A' is the untouched baseline code
+        path; switching costs nothing and mutates no weights.
+        """
+        if path not in ('A', 'B'):
+            raise ValueError("score path must be 'A' or 'B', got %r" % path)
+        if path == 'B' and not self.model.pred.drug_proto:
+            raise ValueError('model_initialize(drug_proto=True) is required for path B')
+        self.model.pred.score_path = path
+        if self.best_model is not None:
+            self.best_model.pred.score_path = path
 
     def pretrain(self, n_epoch = 1, learning_rate = 1e-3, batch_size = 1024, train_print_per_n = 20, sweep_wandb = None):
 
