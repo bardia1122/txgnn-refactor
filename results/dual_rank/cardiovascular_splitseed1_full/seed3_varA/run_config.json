@@ -1,0 +1,28 @@
+{
+  "seed": 3,
+  "tag": "varA",
+  "split": "cardiovascular",
+  "split_seed": 1,
+  "profile": "full",
+  "model": {
+    "n_hid": 100,
+    "n_inp": 100,
+    "n_out": 100,
+    "proto": true,
+    "proto_num": 3,
+    "attention": false,
+    "sim_measure": "all_nodes_profile",
+    "agg_measure": "rarity",
+    "exp_lambda": 0.7
+  },
+  "drug": {
+    "drug_proto": true,
+    "drug_proto_num": 3,
+    "drug_sim_measure": "drug_protein_profile",
+    "exp_lambda_drug": 0.7
+  },
+  "train_seconds": 1552.8704726696014,
+  "eval_seconds": 95.7429895401001,
+  "torch": "2.6.0+cu118",
+  "pyg": "2.8.0"
+}
