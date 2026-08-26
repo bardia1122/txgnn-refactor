@@ -135,3 +135,4 @@ docs/
 data/
 comparison_outputs/
 saved_models/
+*.pkl
