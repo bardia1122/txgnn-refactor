@@ -1,0 +1,113 @@
+{
+  "run_key": "drop_drug_effect_seed1",
+  "arm": "drop_drug_effect",
+  "seed": 1,
+  "split": "complex_disease",
+  "profile": "full",
+  "dropped_relations_requested": [
+    "drug_effect"
+  ],
+  "dropped_relations_in_graph": [
+    "drug_effect",
+    "rev_drug_effect"
+  ],
+  "dropped_edge_counts": {
+    "drug_effect": 53852,
+    "rev_drug_effect": 53852
+  },
+  "dropped_edges_total": 107704,
+  "train_edges_before": 6735310,
+  "train_edges_after": 6627606,
+  "n_edge_types_after": 48,
+  "edge_types_after": [
+    "anatomy|anatomy_anatomy|anatomy",
+    "anatomy|rev_anatomy_protein_absent|gene/protein",
+    "anatomy|rev_anatomy_protein_present|gene/protein",
+    "biological_process|bioprocess_bioprocess|biological_process",
+    "biological_process|rev_bioprocess_protein|gene/protein",
+    "biological_process|rev_exposure_bioprocess|exposure",
+    "cellular_component|cellcomp_cellcomp|cellular_component",
+    "cellular_component|rev_cellcomp_protein|gene/protein",
+    "cellular_component|rev_exposure_cellcomp|exposure",
+    "disease|disease_disease|disease",
+    "disease|disease_phenotype_negative|effect/phenotype",
+    "disease|disease_phenotype_positive|effect/phenotype",
+    "disease|rev_contraindication|drug",
+    "disease|rev_disease_protein|gene/protein",
+    "disease|rev_exposure_disease|exposure",
+    "disease|rev_indication|drug",
+    "disease|rev_off-label use|drug",
+    "drug|contraindication|disease",
+    "drug|drug_drug|drug",
+    "drug|drug_protein|gene/protein",
+    "drug|indication|disease",
+    "drug|off-label use|disease",
+    "effect/phenotype|phenotype_phenotype|effect/phenotype",
+    "effect/phenotype|rev_disease_phenotype_negative|disease",
+    "effect/phenotype|rev_disease_phenotype_positive|disease",
+    "effect/phenotype|rev_phenotype_protein|gene/protein",
+    "exposure|exposure_bioprocess|biological_process",
+    "exposure|exposure_cellcomp|cellular_component",
+    "exposure|exposure_disease|disease",
+    "exposure|exposure_exposure|exposure",
+    "exposure|exposure_molfunc|molecular_function",
+    "exposure|exposure_protein|gene/protein",
+    "gene/protein|anatomy_protein_absent|anatomy",
+    "gene/protein|anatomy_protein_present|anatomy",
+    "gene/protein|bioprocess_protein|biological_process",
+    "gene/protein|cellcomp_protein|cellular_component",
+    "gene/protein|disease_protein|disease",
+    "gene/protein|molfunc_protein|molecular_function",
+    "gene/protein|pathway_protein|pathway",
+    "gene/protein|phenotype_protein|effect/phenotype",
+    "gene/protein|protein_protein|gene/protein",
+    "gene/protein|rev_drug_protein|drug",
+    "gene/protein|rev_exposure_protein|exposure",
+    "molecular_function|molfunc_molfunc|molecular_function",
+    "molecular_function|rev_exposure_molfunc|exposure",
+    "molecular_function|rev_molfunc_protein|gene/protein",
+    "pathway|pathway_pathway|pathway",
+    "pathway|rev_pathway_protein|gene/protein"
+  ],
+  "signature_ablated": false,
+  "signature_disease_etypes": [
+    "disease_disease",
+    "rev_disease_protein"
+  ],
+  "signature_disease_etypes_default": [
+    "disease_disease",
+    "rev_disease_protein"
+  ],
+  "model_config": {
+    "n_hid": 100,
+    "n_inp": 100,
+    "n_out": 100,
+    "proto": true,
+    "proto_num": 3,
+    "attention": false,
+    "sim_measure": "all_nodes_profile",
+    "bert_measure": "disease_name",
+    "agg_measure": "rarity",
+    "num_walks": 200,
+    "walk_mode": "bit",
+    "path_length": 2
+  },
+  "pretrain": {
+    "n_epoch": 1,
+    "learning_rate": 0.001,
+    "batch_size": 1024,
+    "train_print_per_n": 500
+  },
+  "finetune": {
+    "n_epoch": 1000,
+    "learning_rate": 0.0005,
+    "train_print_per_n": 100,
+    "valid_per_n": 20
+  },
+  "pretrain_seconds": 1536.8427917957306,
+  "finetune_seconds": 297.6207437515259,
+  "test_bce_loss": 0.5363580584526062,
+  "torch": "2.6.0+cu118",
+  "device": "NVIDIA GeForce RTX 4060 Ti",
+  "finished_at": "2026-09-15T18:14:02"
+}
