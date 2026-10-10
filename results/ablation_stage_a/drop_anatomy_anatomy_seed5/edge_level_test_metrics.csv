@@ -1,0 +1,10 @@
+relation,AUROC,AUPRC
+drug --contraindication--> disease,0.7440183057787078,0.7042566920187281
+drug --indication--> disease,0.8642865759115477,0.8435546201771713
+drug --off-label use--> disease,0.8006136512247876,0.8074606047394554
+disease --rev_contraindication--> drug,0.6996530131860977,0.702237282300003
+disease --rev_indication--> drug,0.8329101559626819,0.8268414891888087
+disease --rev_off-label use--> drug,0.7961873145214023,0.7819290505587246
+MICRO (drug-disease),0.7618154587590369,0.744320564509013
+MACRO (drug-disease),0.7896115027642042,0.777713289830482
+"MACRO (all relations, NOT comparable across arms)",0.7896115027642042,0.777713289830482
