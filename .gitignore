@@ -134,5 +134,6 @@ mock/
 docs/
 data/
 comparison_outputs/
+logs_*/
 saved_models/
-run_grid.sh
+*.sh
