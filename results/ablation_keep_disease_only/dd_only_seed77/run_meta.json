@@ -1,0 +1,77 @@
+{
+  "run_key": "dd_only_seed77",
+  "arm": "dd_only",
+  "seed": 77,
+  "split": "complex_disease",
+  "profile": "full",
+  "experiment": "keep_disease_only",
+  "kept_relations_requested": [
+    "indication",
+    "contraindication",
+    "off-label use"
+  ],
+  "kept_relation_names": [
+    "contraindication",
+    "indication",
+    "off-label use",
+    "rev_contraindication",
+    "rev_indication",
+    "rev_off-label use"
+  ],
+  "n_edge_types_after": 6,
+  "edge_types_after": [
+    "disease|rev_contraindication|drug",
+    "disease|rev_indication|drug",
+    "disease|rev_off-label use|drug",
+    "drug|contraindication|disease",
+    "drug|indication|disease",
+    "drug|off-label use|disease"
+  ],
+  "n_node_types": 10,
+  "train_edges_before": 6732496,
+  "train_edges_after": 69834,
+  "train_edges_kept_pct": 1.037267604763523,
+  "dropped_edges_total": 6662662,
+  "signature_disease_etypes": [
+    "disease_disease",
+    "rev_disease_protein"
+  ],
+  "signature_sources_present": [],
+  "signature_dim": 44690,
+  "signature_max": 0.0,
+  "encoder_params": 121200,
+  "n_params": 121800,
+  "proto": true,
+  "model_config": {
+    "n_hid": 100,
+    "n_inp": 100,
+    "n_out": 100,
+    "proto": true,
+    "proto_num": 3,
+    "attention": false,
+    "sim_measure": "all_nodes_profile",
+    "bert_measure": "disease_name",
+    "agg_measure": "rarity",
+    "num_walks": 200,
+    "walk_mode": "bit",
+    "path_length": 2
+  },
+  "pretrain": {
+    "n_epoch": 1,
+    "learning_rate": 0.001,
+    "batch_size": 1024,
+    "train_print_per_n": 500
+  },
+  "finetune": {
+    "n_epoch": 1000,
+    "learning_rate": 0.0005,
+    "train_print_per_n": 100,
+    "valid_per_n": 20
+  },
+  "pretrain_seconds": 0.899120569229126,
+  "finetune_seconds": 165.2687840461731,
+  "test_bce_loss": 0.6931471824645996,
+  "torch": "2.6.0+cu118",
+  "device": "NVIDIA GeForce RTX 4060 Ti",
+  "finished_at": "2026-10-15T00:19:07"
+}
