@@ -1,0 +1,5 @@
+relation,metric,"stage A delta (graph+signature, n=5)",signature-only delta (n=10),"signature-only delta (Stage A seeds, n=0)",share_from_signature
+disease_protein,indication,-0.1042440295511279,-0.08291400619891753,,0.795383740977235
+disease_protein,contraindication,-0.1483402271168424,-0.14149895002795987,,0.9538811742313574
+disease_disease,indication,-0.0532853386199706,-0.015564345519964329,,0.2920943344466433
+disease_disease,contraindication,-0.0193811082957989,-0.003745457912810557,,0.19325303051025375
