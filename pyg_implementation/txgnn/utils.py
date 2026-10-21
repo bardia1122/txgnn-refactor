@@ -866,6 +866,10 @@ def evaluate_mb(model, g_pos, g_neg, G, dd_etypes, device, return_embed = False,
         return get_all_metrics_fb(pred_score_pos, pred_score_neg, scores.reshape(-1,).detach().cpu().numpy(), labels, G, True), loss.item()
 
 ## disable all gradient
+# Bumped whenever a change in this package is one that a notebook must be running.
+# Jupyter caches imported modules, so a notebook can assert on this to catch a stale kernel.
+TXGNN_PATCH_LEVEL = 2
+
 def disable_all_gradients(module):
     for param in module.parameters():
         param.requires_grad = False

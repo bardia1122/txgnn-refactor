@@ -135,8 +135,9 @@ class TxGNN:
         all_edges = []  # list of (etype, src_idx, dst_idx)
         for etype in self.G.edge_types:
             ei = self.G[etype].edge_index
-            for i in range(ei.shape[1]):
-                all_edges.append((etype, ei[0, i].item(), ei[1, i].item()))
+            # one .item() per endpoint over ~8.1M edges costs tens of minutes; .tolist()
+            # does the same conversion in one shot, in the same order.
+            all_edges.extend(zip([etype] * ei.shape[1], ei[0].tolist(), ei[1].tolist()))
 
         neg_sampler = Minibatch_NegSampler(self.G, 1, 'fix_dst')
 
@@ -569,6 +570,9 @@ class TxGNN:
 
             for epoch in range(epochs_per_layer):
                 self.graphmask_model.train()
+                # PyG's HeteroData.to() mutates in place, so any helper that moves a graph
+                # moves THIS one. Re-assert the device each epoch; a no-op when correct.
+                self.G = self.G.to(self.device)
                 neg_graph = neg_sampler(self.G)
                 original_predictions_pos, original_predictions_neg, _, _ = self.graphmask_model.graphmask_forward(self.G, self.G, neg_graph, graphmask_mode = False, only_relation = relation, no_base = no_base)
 
