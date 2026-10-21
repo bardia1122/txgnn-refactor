@@ -714,7 +714,11 @@ def evaluate_graphmask(model, G, g_valid_pos, g_valid_neg, only_relation, epoch,
         loss_pred = F.binary_cross_entropy(updated_predictions, torch.Tensor(labels).float().to(device)).item()
 
         # loss is the divergence with original predictions
-        G = G.to('cpu')
+        # NOTE: PyG's HeteroData.to() mutates in place and returns self, unlike DGL's
+        # g.to(), which returns a copy. Sending G / the eval graphs to 'cpu' here moved
+        # the *caller's* graphs (TxGNN.G, TxGNN.g_valid_pos, ...) to CPU, so the next
+        # training epoch died with a cuda:0-vs-cpu mismatch. Leave the caller's graphs
+        # where they are; they are already on `device` and nothing below needs them.
         original_predictions = original_predictions.to(device)
         loss_pred_ori = F.binary_cross_entropy(original_predictions, torch.Tensor(labels).float().to(device)).item()
 
@@ -722,9 +726,6 @@ def evaluate_graphmask(model, G, g_valid_pos, g_valid_neg, only_relation, epoch,
 
         g = torch.relu(loss - allowance).mean()
         f = penalty * penalty_scaling
-
-        g_valid_pos = g_valid_pos.to('cpu')
-        g_valid_neg = g_valid_neg.to('cpu')
 
         print("----- " + mode + " Result -----")
         print("Epoch {0:n}, Mean divergence={1:.4f}, mean penalty={2:.4f}, bce_update={3:.4f}, bce_original={4:.4f}, num_masked_l1={5:.4f}, num_masked_l2={6:.4f}".format(
@@ -794,7 +795,11 @@ def evaluate_ib(model, G, g_valid_pos, g_valid_neg, only_relation, epoch, etypes
         loss_pred = F.binary_cross_entropy(updated_predictions, torch.Tensor(labels).float().to(device)).item()
 
         # loss is the divergence with original predictions
-        G = G.to('cpu')
+        # NOTE: PyG's HeteroData.to() mutates in place and returns self, unlike DGL's
+        # g.to(), which returns a copy. Sending G / the eval graphs to 'cpu' here moved
+        # the *caller's* graphs (TxGNN.G, TxGNN.g_valid_pos, ...) to CPU, so the next
+        # training epoch died with a cuda:0-vs-cpu mismatch. Leave the caller's graphs
+        # where they are; they are already on `device` and nothing below needs them.
         original_predictions = original_predictions.to(device)
         loss_pred_ori = F.binary_cross_entropy(original_predictions, torch.Tensor(labels).float().to(device)).item()
 
@@ -802,9 +807,6 @@ def evaluate_ib(model, G, g_valid_pos, g_valid_neg, only_relation, epoch, etypes
 
         g = torch.relu(loss - allowance).mean()
         f = penalty * penalty_scaling
-
-        g_valid_pos = g_valid_pos.to('cpu')
-        g_valid_neg = g_valid_neg.to('cpu')
 
         print("----- " + mode + " Result -----")
         print("Epoch {0:n}, Mean divergence={1:.4f}, mean penalty={2:.4f}, bce_update={3:.4f}, bce_original={4:.4f}, num_masked_l1={5:.4f}, num_masked_l2={6:.4f}".format(
