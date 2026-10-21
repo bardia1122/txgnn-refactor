@@ -1,0 +1,80 @@
+{
+  "run_key": "only_disease_relations_seed3",
+  "arm": "only_disease_relations",
+  "seed": 3,
+  "split": "complex_disease",
+  "profile": "full",
+  "experiment": "full_ranking",
+  "note": "the keep-only headline, re-tested under the ranking protocol",
+  "protocols": [
+    "edge_level_fb",
+    "disease_centric"
+  ],
+  "ranking_error": null,
+  "ranking_seconds": 143.10969519615173,
+  "kept_relations_requested": [
+    "indication",
+    "contraindication",
+    "off-label use",
+    "disease_disease",
+    "disease_protein"
+  ],
+  "n_edge_types_after": 9,
+  "edge_types_after": [
+    "disease|disease_disease|disease",
+    "disease|rev_contraindication|drug",
+    "disease|rev_disease_protein|gene/protein",
+    "disease|rev_indication|drug",
+    "disease|rev_off-label use|drug",
+    "drug|contraindication|disease",
+    "drug|indication|disease",
+    "drug|off-label use|disease",
+    "gene/protein|disease_protein|disease"
+  ],
+  "signature_sources_present": [
+    "disease_disease",
+    "rev_disease_protein"
+  ],
+  "encoder_params": 181800,
+  "n_params": 182700,
+  "proto": true,
+  "signature_disease_etypes": [
+    "disease_disease",
+    "rev_disease_protein"
+  ],
+  "dropped_edges_total": 6475458,
+  "train_edges_before": 6734360,
+  "train_edges_after": 258902,
+  "model_config": {
+    "n_hid": 100,
+    "n_inp": 100,
+    "n_out": 100,
+    "proto": true,
+    "proto_num": 3,
+    "attention": false,
+    "sim_measure": "all_nodes_profile",
+    "bert_measure": "disease_name",
+    "agg_measure": "rarity",
+    "num_walks": 200,
+    "walk_mode": "bit",
+    "path_length": 2
+  },
+  "pretrain": {
+    "n_epoch": 1,
+    "learning_rate": 0.001,
+    "batch_size": 1024,
+    "train_print_per_n": 500
+  },
+  "finetune": {
+    "n_epoch": 1000,
+    "learning_rate": 0.0005,
+    "train_print_per_n": 100,
+    "valid_per_n": 20
+  },
+  "pretrain_seconds": 13.028095722198486,
+  "finetune_seconds": 620.4773194789886,
+  "test_bce_loss": 0.6576370596885681,
+  "torch": "2.6.0+cu118",
+  "device": "NVIDIA GeForce RTX 4060 Ti",
+  "finished_at": "2026-10-17T22:56:35"
+}
