@@ -518,7 +518,9 @@ class TxGNN:
                               no_base = False,
                               gate_hidden_size = 32,
                               amp = False,
-                              layers = None):
+                              layers = None,
+                              gate_checkpoint = None,
+                              resume_from = None):
 
         self.relation = relation
 
@@ -546,6 +548,19 @@ class TxGNN:
             self.graphmask_model.add_graphmask_parameters(self.G, gate_hidden_size = gate_hidden_size)
         else:
             print("Training from checkpoint/pretrained model...")
+
+        # Resume the gates alone. Only the gate and baseline tensors are ever trained, so this
+        # restores a crashed or interrupted run without touching the encoder or the predictor,
+        # and pairs with `layers` to re-run a single phase.
+        if resume_from is not None and os.path.exists(resume_from):
+            gate_state = torch.load(resume_from, map_location = 'cpu')
+            missing, unexpected = self.graphmask_model.load_state_dict(gate_state, strict = False)
+            if unexpected:
+                raise ValueError('Gate checkpoint %s does not match this model: %s'
+                                 % (resume_from, list(unexpected)[:5]))
+            print('Resumed %d gate tensors from %s' % (len(gate_state), resume_from))
+        elif resume_from is not None:
+            print('No gate checkpoint at %s; starting the gates from scratch.' % resume_from)
 
         self.graphmask_model.eval()
         disable_all_gradients(self.graphmask_model)
@@ -683,6 +698,14 @@ class TxGNN:
                         best_gate_state = {k: v.detach().clone()
                                            for k, v in self.graphmask_model.state_dict().items()
                                            if k.startswith(('gates_all.', 'baselines_all.'))}
+
+                        if gate_checkpoint is not None:
+                            # persist it now, not at the end: an OOM in the second phase used
+                            # to throw away every epoch of the first one
+                            os.makedirs(os.path.dirname(os.path.abspath(gate_checkpoint)),
+                                        exist_ok = True)
+                            torch.save({k: v.cpu() for k, v in best_gate_state.items()},
+                                       gate_checkpoint)
 
         if best_gate_state is not None:
             self.graphmask_model.load_state_dict(best_gate_state, strict = False)

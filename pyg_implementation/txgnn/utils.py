@@ -868,7 +868,7 @@ def evaluate_mb(model, g_pos, g_neg, G, dd_etypes, device, return_embed = False,
 ## disable all gradient
 # Bumped whenever a change in this package is one that a notebook must be running.
 # Jupyter caches imported modules, so a notebook can assert on this to catch a stale kernel.
-TXGNN_PATCH_LEVEL = 4
+TXGNN_PATCH_LEVEL = 5
 
 def disable_all_gradients(module):
     for param in module.parameters():
