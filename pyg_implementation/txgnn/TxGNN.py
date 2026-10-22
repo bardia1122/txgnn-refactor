@@ -1,6 +1,7 @@
 import os
 import math
 import argparse
+import contextlib
 import copy
 import pickle
 from argparse import ArgumentParser
@@ -515,7 +516,8 @@ class TxGNN:
                               moving_average_window_size = 100,
                               valid_per_n = 5,
                               no_base = False,
-                              gate_hidden_size = 32):
+                              gate_hidden_size = 32,
+                              amp = False):
 
         self.relation = relation
 
@@ -535,10 +537,10 @@ class TxGNN:
             etypes_train = dd_etypes
 
         best_loss_sum = 100
+        best_gate_state = None
 
         if "graphmask_model" not in self.__dict__:
             self.graphmask_model = copy.deepcopy(self.best_model)
-            self.best_graphmask_model = copy.deepcopy(self.graphmask_model)
             ## add all the parameters for graphmask
             self.graphmask_model.add_graphmask_parameters(self.G, gate_hidden_size = gate_hidden_size)
         else:
@@ -564,6 +566,18 @@ class TxGNN:
         self.G = self.G.to(self.device)
         total_edges = sum(self.G[et].num_edges for et in self.G.edge_types)
 
+        # Opt-in bfloat16 autocast. The gated forward retains an (E x n_hid) activation per
+        # edge type per layer; with ~6.7M edges at n_hid=100 that is the whole memory budget,
+        # and the second phase (gates on layer 1) retains BOTH layers. bf16 halves it.
+        # Losses are always computed in fp32.
+        _use_amp = bool(amp) and str(self.device).startswith('cuda')
+        def _autocast():
+            if not _use_amp:
+                return contextlib.nullcontext()
+            return torch.autocast(device_type = 'cuda', dtype = torch.bfloat16)
+        if _use_amp:
+            print('GraphMask: bfloat16 autocast enabled for the forward passes.')
+
         ## iterate over layers. One at a time!
         for layer in reversed(list(range(self.graphmask_model.count_layers()))):
             self.graphmask_model.enable_layer(layer) ## enable baselines and gates parameters
@@ -574,16 +588,22 @@ class TxGNN:
                 # moves THIS one. Re-assert the device each epoch; a no-op when correct.
                 self.G = self.G.to(self.device)
                 neg_graph = neg_sampler(self.G)
-                original_predictions_pos, original_predictions_neg, _, _ = self.graphmask_model.graphmask_forward(self.G, self.G, neg_graph, graphmask_mode = False, only_relation = relation, no_base = no_base)
 
-                pos_score = torch.cat([original_predictions_pos[i] for i in etypes_train])
-                neg_score = torch.cat([original_predictions_neg[i] for i in etypes_train])
-                original_predictions = torch.sigmoid(torch.cat((pos_score, neg_score))).to('cpu')
+                # The unmasked predictions are the regression target: they need no gradient,
+                # and the model is frozen apart from the gates, so hold no graph for them.
+                with torch.no_grad(), _autocast():
+                    original_predictions_pos, original_predictions_neg, _, _ = self.graphmask_model.graphmask_forward(self.G, self.G, neg_graph, graphmask_mode = False, only_relation = relation, no_base = no_base)
 
-                updated_predictions_pos, updated_predictions_neg, penalty, num_masked = self.graphmask_model.graphmask_forward(self.G, self.G, neg_graph, graphmask_mode = True, only_relation = relation, no_base = no_base)
-                pos_score = torch.cat([updated_predictions_pos[i] for i in etypes_train])
-                neg_score = torch.cat([updated_predictions_neg[i] for i in etypes_train])
-                updated_predictions = torch.sigmoid(torch.cat((pos_score, neg_score)))
+                    pos_score = torch.cat([original_predictions_pos[i] for i in etypes_train])
+                    neg_score = torch.cat([original_predictions_neg[i] for i in etypes_train])
+                    original_predictions = torch.sigmoid(torch.cat((pos_score, neg_score)).float()).to('cpu')
+
+                with _autocast():
+                    updated_predictions_pos, updated_predictions_neg, penalty, num_masked = self.graphmask_model.graphmask_forward(self.G, self.G, neg_graph, graphmask_mode = True, only_relation = relation, no_base = no_base)
+                    pos_score = torch.cat([updated_predictions_pos[i] for i in etypes_train])
+                    neg_score = torch.cat([updated_predictions_neg[i] for i in etypes_train])
+                penalty = penalty.float()
+                updated_predictions = torch.sigmoid(torch.cat((pos_score, neg_score)).float())
 
                 labels = [1] * len(pos_score) + [0] * len(neg_score)
                 loss_pred = F.binary_cross_entropy(updated_predictions, torch.Tensor(labels).float().to(self.device)).item()
@@ -620,15 +640,39 @@ class TxGNN:
                               '%masked_L1': num_masked[0]/total_edges,
                               '%masked_L2': num_masked[1]/total_edges})
 
-                del original_predictions, updated_predictions, f, g, loss, pos_score, neg_score, loss_pred_ori, loss_pred, neg_graph
+                # Every name below still references part of this epoch's autograd graph or
+                # the negative graph. Without dropping them the next forward allocates while
+                # the previous epoch is still resident, roughly doubling peak memory.
+                del (original_predictions, updated_predictions, f, g, loss, pos_score,
+                     neg_score, loss_pred_ori, loss_pred, neg_graph, penalty,
+                     original_predictions_pos, original_predictions_neg,
+                     updated_predictions_pos, updated_predictions_neg)
 
                 if epoch % valid_per_n == 0:
+                    if torch.cuda.is_available():
+                        # the per-epoch allocation pattern fragments the caching allocator,
+                        # which is what turns a graph that fits at epoch 0 into an OOM later
+                        torch.cuda.empty_cache()
+
                     loss_sum = evaluate_graphmask(self.graphmask_model, self.G, self.g_valid_pos, self.g_valid_neg, relation, epoch, mode = 'validation', allowance = allowance, penalty_scaling = penalty_scaling, etypes_train = etypes_train, device = self.device, weight_bias_track = self.weight_bias_track, wandb = self.wandb, no_base = no_base)
 
+                    if torch.cuda.is_available():
+                        print('    peak GPU memory %.2f GB of %.2f GB (layer %d, epoch %d)' % (
+                            torch.cuda.max_memory_allocated() / 1e9,
+                            torch.cuda.get_device_properties(0).total_memory / 1e9,
+                            layer, epoch))
+
                     if loss_sum < best_loss_sum:
-                        # takes the best checkpoint
+                        # takes the best checkpoint. Only the gates and baselines are trained,
+                        # so snapshot those instead of deep-copying the entire model.
                         best_loss_sum = loss_sum
-                        self.best_graphmask_model = copy.deepcopy(self.graphmask_model)
+                        best_gate_state = {k: v.detach().clone()
+                                           for k, v in self.graphmask_model.state_dict().items()
+                                           if k.startswith(('gates_all.', 'baselines_all.'))}
+
+        if best_gate_state is not None:
+            self.graphmask_model.load_state_dict(best_gate_state, strict = False)
+        self.best_graphmask_model = self.graphmask_model
 
         loss_sum, metrics = evaluate_graphmask(self.best_graphmask_model, self.G, self.g_test_pos, self.g_test_neg, relation, epoch, mode = 'testing', allowance = allowance, penalty_scaling = penalty_scaling, etypes_train = etypes_train, device = self.device, weight_bias_track = self.weight_bias_track, wandb = self.wandb, no_base = no_base)
 
