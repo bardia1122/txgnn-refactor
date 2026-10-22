@@ -517,7 +517,8 @@ class TxGNN:
                               valid_per_n = 5,
                               no_base = False,
                               gate_hidden_size = 32,
-                              amp = False):
+                              amp = False,
+                              layers = None):
 
         self.relation = relation
 
@@ -571,6 +572,9 @@ class TxGNN:
         # and the second phase (gates on layer 1) retains BOTH layers. bf16 halves it.
         # Losses are always computed in fp32.
         _use_amp = bool(amp) and str(self.device).startswith('cuda')
+        if _use_amp and not torch.cuda.is_bf16_supported():
+            print('GraphMask: this GPU does not support bfloat16; running in fp32.')
+            _use_amp = False
         def _autocast():
             if not _use_amp:
                 return contextlib.nullcontext()
@@ -579,7 +583,17 @@ class TxGNN:
             print('GraphMask: bfloat16 autocast enabled for the forward passes.')
 
         ## iterate over layers. One at a time!
-        for layer in reversed(list(range(self.graphmask_model.count_layers()))):
+        # `layers` restricts which phases run, so a phase can be re-run on its own: the gates
+        # live in self.graphmask_model, which survives between calls. Last layer first, as
+        # GraphMask requires, whatever order is passed.
+        _all_layers = list(reversed(list(range(self.graphmask_model.count_layers()))))
+        _layers = _all_layers if layers is None else [l for l in _all_layers if l in set(layers)]
+        if not _layers:
+            raise ValueError('No layer to train: layers=%s, available=%s' % (layers, _all_layers))
+        if layers is not None:
+            print('Training GraphMask layers %s only (of %s).' % (_layers, _all_layers))
+
+        for layer in _layers:
             self.graphmask_model.enable_layer(layer) ## enable baselines and gates parameters
 
             for epoch in range(epochs_per_layer):
