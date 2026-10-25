@@ -135,6 +135,16 @@ class DistMultPredictor(nn.Module):
         return score
 
     def forward(self, graph, G, h, pretrain_mode, mode, block=None, only_relation=None):
+        # Keep the decoder in fp32 even under autocast. It is cheap next to message passing,
+        # and the prototype path mixes encoder output with fp32 degree and similarity tensors
+        # and then index-puts the result back into h, which requires matching dtypes.
+        if h and next(iter(h.values())).is_cuda:
+            with torch.autocast(device_type='cuda', enabled=False):
+                h = {k: v.float() for k, v in h.items()}
+                return self._forward(graph, G, h, pretrain_mode, mode, block, only_relation)
+        return self._forward(graph, G, h, pretrain_mode, mode, block, only_relation)
+
+    def _forward(self, graph, G, h, pretrain_mode, mode, block=None, only_relation=None):
         scores = {}
         s_l = []
 
@@ -467,10 +477,16 @@ class HeteroRGCNLayer(nn.Module):
                 self.penalty.append(penalty)
                 self.num_masked += len(torch.where(gate.reshape(-1) != 1)[0])
 
+                # The gate MLP ends in a LayerNorm, which autocast keeps in fp32, so `gate`
+                # comes back fp32 and would promote the whole (num_edges x out_size) message
+                # back to fp32 -- the one tensor autocast is meant to shrink. The gate values
+                # are exactly 0 or 1, so the cast is lossless and the straight-through
+                # gradient still reaches the fp32 gate parameters.
+                gate_m = gate.unsqueeze(-1).to(src_feat.dtype)
                 if no_base:
-                    message = gate.unsqueeze(-1) * src_feat
+                    message = gate_m * src_feat
                 else:
-                    message = gate.unsqueeze(-1) * src_feat + (1 - gate.unsqueeze(-1)) * self.baseline[etype][self.layer].unsqueeze(0)
+                    message = gate_m * src_feat + (1 - gate_m) * self.baseline[etype][self.layer].unsqueeze(0).to(src_feat.dtype)
 
                 if return_gates:
                     self.gate_storage[etype] = copy.deepcopy(gate.to('cpu').detach())
