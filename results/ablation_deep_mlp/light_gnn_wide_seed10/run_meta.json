@@ -1,0 +1,49 @@
+{
+  "experiment": "deep_mlp",
+  "run_key": "light_gnn_wide_seed10",
+  "arm": "light_gnn_wide",
+  "seed": 10,
+  "split": "complex_disease",
+  "profile": "full",
+  "note": "NEW: message passing, shared weight, capacity restored",
+  "encoder_kind": "light_gnn_wide",
+  "encoder_depth": null,
+  "encoder_reads_graph_expected": true,
+  "wide_hidden": 2512,
+  "checkpointed_blocks": false,
+  "n_edge_types_after": 50,
+  "n_node_types": 10,
+  "train_edges": 6733350,
+  "features_frozen": true,
+  "model_config": {
+    "n_hid": 100,
+    "n_inp": 100,
+    "n_out": 100,
+    "proto": true,
+    "proto_num": 3,
+    "attention": false,
+    "sim_measure": "all_nodes_profile",
+    "agg_measure": "rarity"
+  },
+  "expect_encoder_params": 1010024,
+  "encoder_params": 1010024,
+  "n_params": 1015024,
+  "graph_sensitivity": 69.842529296875,
+  "pretrain": {
+    "n_epoch": 1,
+    "learning_rate": 0.001,
+    "batch_size": 1024,
+    "train_print_per_n": 500
+  },
+  "finetune": {
+    "n_epoch": 1000,
+    "learning_rate": 0.0005,
+    "train_print_per_n": 100,
+    "valid_per_n": 20
+  },
+  "pretrain_seconds": 1917.5,
+  "finetune_seconds": 388.8,
+  "test_bce_loss": 0.6565075516700745,
+  "torch": "2.6.0+cu118",
+  "device": "NVIDIA GeForce RTX 4060 Ti"
+}

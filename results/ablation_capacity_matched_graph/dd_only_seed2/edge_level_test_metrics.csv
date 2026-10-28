@@ -1,0 +1,10 @@
+relation,AUROC,AUPRC
+drug --contraindication--> disease,0.5,0.5
+drug --indication--> disease,0.5,0.5
+drug --off-label use--> disease,0.5,0.5
+disease --rev_contraindication--> drug,0.5,0.5
+disease --rev_indication--> drug,0.5,0.5
+disease --rev_off-label use--> drug,0.5,0.5
+MICRO (drug-disease),0.5,0.5
+MACRO (drug-disease),0.5,0.5
+"MACRO (all relations, NOT comparable across arms)",0.5,0.5

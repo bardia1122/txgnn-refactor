@@ -1,0 +1,66 @@
+{
+  "experiment": "capacity_matched_graph",
+  "run_key": "dp_plus_padding_matched_seed5",
+  "arm": "dp_plus_padding_matched",
+  "seed": 5,
+  "split": "complex_disease",
+  "profile": "full",
+  "note": "NEW: identity-vs-count at matched capacity (disease_protein)",
+  "kept_relations_requested": [
+    "indication",
+    "contraindication",
+    "off-label use",
+    "disease_protein",
+    "phenotype_phenotype"
+  ],
+  "n_edge_types_after": 9,
+  "edge_types_after": [
+    "disease|rev_contraindication|drug",
+    "disease|rev_disease_protein|gene/protein",
+    "disease|rev_indication|drug",
+    "disease|rev_off-label use|drug",
+    "drug|contraindication|disease",
+    "drug|indication|disease",
+    "drug|off-label use|disease",
+    "effect/phenotype|phenotype_phenotype|effect/phenotype",
+    "gene/protein|disease_protein|disease"
+  ],
+  "n_node_types": 10,
+  "train_edges_after": 234134,
+  "train_edges_before": 6731966,
+  "model_config": {
+    "n_hid": 288,
+    "n_inp": 100,
+    "n_out": 288,
+    "proto": true,
+    "proto_num": 3,
+    "attention": false,
+    "sim_measure": "all_nodes_profile",
+    "agg_measure": "rarity"
+  },
+  "expect_encoder_params": 1010880,
+  "encoder_params": 1010880,
+  "n_params": 1013472,
+  "signature_sources_present": [
+    "rev_disease_protein"
+  ],
+  "signature_dim": 44690,
+  "signature_max": 1.0,
+  "pretrain": {
+    "n_epoch": 1,
+    "learning_rate": 0.001,
+    "batch_size": 1024,
+    "train_print_per_n": 500
+  },
+  "finetune": {
+    "n_epoch": 1000,
+    "learning_rate": 0.0005,
+    "train_print_per_n": 100,
+    "valid_per_n": 20
+  },
+  "pretrain_seconds": 11.2,
+  "finetune_seconds": 655.7,
+  "test_bce_loss": 0.6410759091377258,
+  "torch": "2.6.0+cu118",
+  "device": "NVIDIA GeForce RTX 4060 Ti"
+}
