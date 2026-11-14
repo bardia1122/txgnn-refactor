@@ -262,6 +262,8 @@ class DistMultPredictor(nn.Module):
                             proto_emb = 0.8*h_disease['disease_query'] + 0.2*out
                         elif self.agg_measure == 'avg':
                             proto_emb = 0.5*h_disease['disease_query'] + 0.5*out
+                        elif self.agg_measure == 'const-0.9':   # flat gate at the held-out (degree-0) value of 'rarity'
+                            proto_emb = 0.1*h_disease['disease_query'] + 0.9*out
                         elif self.agg_measure == 'rarity':
                             if src == 'disease':
                                 G_out_deg_etype = degree(G[etype].edge_index[0], num_nodes=G[src].num_nodes)
@@ -293,6 +295,9 @@ class DistMultPredictor(nn.Module):
                         elif self.agg_measure == 'avg':
                             coef_src = 0.5
                             coef_dst = 0.5
+                        elif self.agg_measure == 'const-0.9':
+                            coef_src = 0.9
+                            coef_dst = 0.9
                         elif self.agg_measure == '100proto':
                             coef_src = 1
                             coef_dst = 1
