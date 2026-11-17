@@ -3,7 +3,8 @@
 Code, experiment notebooks and per-run results for the paper
 
 > **Disentangling curated knowledge from graph learning in zero-shot drug repurposing**
-> *Authors* — *Journal / preprint link to be added*
+> Roza Ganjipour\*, Bardia Sabagh Kermani\*, Mostafa Haghir Chehreghani — Amirkabir University of Technology (Tehran Polytechnic)  
+> \*Equal contribution; author order is alphabetical by last name. *Journal / preprint link to be added.*
 
 The paper asks where the zero-shot performance of [TxGNN](https://github.com/mims-harvard/TxGNN)
 (Huang et al., *Nature Medicine* 2024) comes from: the curated biomedical knowledge in its knowledge graph,
@@ -136,7 +137,7 @@ If you use this code or these results, please cite our paper and the original Tx
 ```bibtex
 @article{ourpaper,
   title   = {Disentangling curated knowledge from graph learning in zero-shot drug repurposing},
-  author  = {TO BE ADDED},
+  author  = {Ganjipour, Roza and {Sabagh Kermani}, Bardia and {Haghir Chehreghani}, Mostafa},
   journal = {TO BE ADDED},
   year    = {TO BE ADDED}
 }
